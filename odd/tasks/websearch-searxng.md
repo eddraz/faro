@@ -38,4 +38,7 @@ try one source, then the next, obscura last.
 
 ## Evidence
 
-(pending)
+- `cargo test` 17/17 green (searxng settings template, run args with/without network backend, JSON fixture incl. mixed unresponsive shapes, cascade merge semantics, obscura parsers regression).
+- Real smoke (podman 5.4.2, Debian 13): image pulled, settings.yml written once, container created on 127.0.0.1:8888. First run surfaced missing pasta (exit 127) and the cascade fell back to obscura live; resolved by preferring slirp4netns and then pasta (package `passt`) installed by the user.
+- Verified: full 5-engine run served by one searxng call (2 results each); `podman stop` -> auto-start on next query reporting `degraded upstream: duckduckgo (CAPTCHA), wikidata (timeout)` with obscura fill; `--no-searxng` pure obscura; `--json` includes searxng results.
+- Commits: this feature lands as work units on feature/websearch-cli (see git log: feat(searxng), fix(searxng), docs).

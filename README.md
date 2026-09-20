@@ -57,9 +57,22 @@ Options:
 
 Engines that fail (network, blockpage, timeout) print one error line to stderr and never sink the run.
 
+## Hybrid mode: SearXNG first, obscura fallback
+
+By default the CLI runs a local [SearXNG](https://docs.searxng.org/) container (rootless podman) and asks it first: one HTTP call covers every engine with normalized JSON. When SearXNG reports an upstream engine as unresponsive (rate limit, CAPTCHA — it lists them in `unresponsive_engines`), that engine skips SearXNG and its results come from the obscura path instead. Engines that return too few results get obscura fill-up with URL dedup.
+
+Container lifecycle (only when the SearXNG path is taken):
+
+- healthy check on `http://127.0.0.1:8888/healthz` — reuse if OK
+- stopped container: `podman start searxng`
+- missing container: image pull, `settings.yml` written once (JSON API enabled, limiter off), container created bound to `127.0.0.1:8888`
+- podman itself is auto-installed with visible sudo if missing (apt/dnf); container networking prefers pasta, falls back to slirp4netns, or installs pasta (package `passt`) as a last resort
+
+Flags: `--no-searxng` (pure obscura), `--searxng-port <PORT>` (default 8888).
+
 ## How it works
 
-Each engine is fetched by spawning `obscura fetch <url> --stealth --dump html` and parsed with CSS selectors (`scraper` crate). Parser correctness is covered by fixture-based unit tests built from real captured pages (`cargo test`).
+SearXNG answers through its JSON API; obscura-backed engines are fetched by spawning `obscura fetch <url> --stealth --dump html` and parsed with CSS selectors (`scraper` crate). Parser correctness is covered by fixture-based unit tests built from real captured pages (`cargo test`).
 
 ## Tests
 

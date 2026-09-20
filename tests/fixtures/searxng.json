@@ -47,6 +47,14 @@
     "rust programming language book"
   ],
   "unresponsive_engines": [
-    "bing (HTTP error 429)"
+    [
+      "brave",
+      "timeout"
+    ],
+    [
+      "wikidata",
+      "timeout"
+    ],
+    "google (HTTP error 429)"
   ]
 }

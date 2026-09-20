@@ -276,6 +276,34 @@ pub(crate) fn ensure_ready(port: u16) -> Result<()> {
     wait_healthy(port, STARTUP_BUDGET)
 }
 
+/// Upstream engine failures arrive either as `["bing (HTTP error 429)"]`
+/// strings or as `["brave", "timeout"]` [engine, reason] pairs depending on
+/// the SearXNG version; normalize both to "engine (reason)" strings.
+fn deserialize_unresponsive<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<serde_json::Value> = serde::Deserialize::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .map(|entry| match entry {
+            serde_json::Value::String(text) => text,
+            serde_json::Value::Array(parts) => {
+                let texts: Vec<String> = parts
+                    .into_iter()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+                    .collect();
+                if texts.len() >= 2 {
+                    format!("{} ({})", texts[0], texts[1])
+                } else {
+                    texts.join(" ")
+                }
+            }
+            other => other.to_string(),
+        })
+        .collect())
+}
+
 #[derive(Deserialize)]
 struct SearxngResponse {
     #[serde(default)]
@@ -283,7 +311,7 @@ struct SearxngResponse {
     /// Upstream engines that failed (rate limit, captcha, timeout). Their
     /// results are missing from `results`, so coverage silently degrades;
     /// the cascade uses this to route those engines to the obscura fallback.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_unresponsive")]
     unresponsive_engines: Vec<String>,
 }
 
@@ -305,8 +333,10 @@ pub(crate) struct SearxngSearch {
 }
 
 pub(crate) fn parse_search(json: &str) -> Result<SearxngSearch> {
-    let response: SearxngResponse =
-        serde_json::from_str(json).context("invalid searxng JSON response")?;
+    let response: SearxngResponse = serde_json::from_str(json).map_err(|error| {
+        let preview: String = json.chars().take(200).collect();
+        anyhow!("invalid searxng JSON response ({error}); body starts with: {preview:?}")
+    })?;
     let results = response
         .results
         .into_iter()
@@ -415,6 +445,14 @@ mod tests {
             "https://en.wikipedia.org/wiki/Rust_(programming_language)"
         );
         assert!(!search.results[0].snippet.is_empty());
-        assert_eq!(search.unresponsive_engines, vec!["bing (HTTP error 429)"]);
+        // Both unresponsive entry shapes normalize to "engine (reason)".
+        assert_eq!(
+            search.unresponsive_engines,
+            vec![
+                "brave (timeout)",
+                "wikidata (timeout)",
+                "google (HTTP error 429)"
+            ]
+        );
     }
 }
