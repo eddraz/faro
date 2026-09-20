@@ -2,11 +2,15 @@
 name = "faro"
 version = "0.1.0"
 edition = "2021"
-description = "Multi-engine web search CLI powered by the obscura headless browser"
+description = "Hybrid multi-engine web search CLI powered by obscura and SearXNG"
 
 [[bin]]
 name = "faro"
 path = "src/main.rs"
+
+[profile.release]
+lto = "thin"
+strip = true
 
 [dependencies]
 anyhow = "1"
