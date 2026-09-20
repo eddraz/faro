@@ -249,6 +249,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "faro"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "flate2",
+ "percent-encoding",
+ "scraper",
+ "serde",
+ "serde_json",
+ "tar",
+ "tokio",
+ "ureq",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1211,22 +1227,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
 dependencies = [
  "rustls-pki-types",
-]
-
-[[package]]
-name = "websearch"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "flate2",
- "percent-encoding",
- "scraper",
- "serde",
- "serde_json",
- "tar",
- "tokio",
- "ureq",
 ]
 
 [[package]]

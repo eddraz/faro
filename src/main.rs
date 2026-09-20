@@ -1,4 +1,4 @@
-//! websearch: hybrid multi-engine search CLI (SearXNG first, obscura fallback).
+//! faro: hybrid multi-engine search CLI (SearXNG first, obscura fallback).
 
 mod bootstrap;
 mod engine;
@@ -13,7 +13,7 @@ use clap::{Parser, ValueEnum};
 /// Hybrid multi-engine web search CLI: a local SearXNG container answers
 /// first, obscura-backed engines fill the gaps and cover degraded engines.
 #[derive(Parser)]
-#[command(name = "websearch", version, about)]
+#[command(name = "faro", version, about)]
 struct Args {
     /// Search query (e.g. "rust programming").
     query: String,

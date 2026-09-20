@@ -1,11 +1,11 @@
 [package]
-name = "websearch"
+name = "faro"
 version = "0.1.0"
 edition = "2021"
 description = "Multi-engine web search CLI powered by the obscura headless browser"
 
 [[bin]]
-name = "websearch"
+name = "faro"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,4 +1,4 @@
-# websearch
+# faro
 
 Multi-engine web search CLI powered by the [obscura](https://github.com/h4ckf0r0day/obscura) headless browser.
 
@@ -33,19 +33,19 @@ cargo build --release
 
 ```bash
 # Query every engine (default limit: 10 per engine)
-websearch "rust programming"
+faro "rust programming"
 
 # Only some engines, tighter limit
-websearch "rust programming" --engine github --engine wikipedia --limit 3
+faro "rust programming" --engine github --engine wikipedia --limit 3
 
 # JSON output
-websearch "rust programming" --json
+faro "rust programming" --json
 
 # Table with snippets
-websearch "rust programming" --with-snippet
+faro "rust programming" --with-snippet
 
 # Per-engine fetch timeout
-websearch "rust programming" --timeout 30
+faro "rust programming" --timeout 30
 ```
 
 Options:
