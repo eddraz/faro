@@ -3,8 +3,10 @@
 use super::{encode_query, text_of, SearchResult};
 
 pub(crate) fn url(query: &str) -> String {
+    // fulltext=1 forces the search-results page: without it MediaWiki
+    // redirects near-exact queries straight to the matching article.
     format!(
-        "https://en.wikipedia.org/w/index.php?search={}",
+        "https://en.wikipedia.org/w/index.php?search={}&fulltext=1",
         encode_query(query)
     )
 }
