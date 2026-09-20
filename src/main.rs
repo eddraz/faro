@@ -1,6 +1,8 @@
 //! websearch: multi-engine web search CLI powered by the obscura headless browser.
 
 mod bootstrap;
+mod engine;
+mod output;
 mod runner;
 
 use clap::{Parser, ValueEnum};
@@ -58,24 +60,44 @@ impl EngineKind {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let selected: Vec<String> = if args.engines.is_empty() {
-        [
+    let selected: Vec<EngineKind> = if args.engines.is_empty() {
+        vec![
             EngineKind::Github,
             EngineKind::Duckduckgo,
             EngineKind::Bing,
             EngineKind::Yahoo,
             EngineKind::Wikipedia,
         ]
-        .iter()
-        .map(|k| k.as_str().to_string())
-        .collect()
     } else {
-        args.engines.iter().map(|k| k.as_str().to_string()).collect()
+        args.engines.clone()
     };
 
     let obscura = bootstrap::ensure_obscura().await?;
-    let _ = runner::fetch_html(&obscura, "https://example.com", args.timeout).await;
-    println!("engines: {}", selected.join(", "));
-    println!("query: {} (limit {})", args.query, args.limit);
+
+    let mut handles = Vec::new();
+    for kind in selected {
+        let obscura = obscura.clone();
+        let query = args.query.clone();
+        let limit = args.limit;
+        let timeout = args.timeout;
+        handles.push(tokio::spawn(async move {
+            engine::run_engine(kind.as_str(), &obscura, &query, limit, timeout).await
+        }));
+    }
+
+    let mut all_results: Vec<engine::SearchResult> = Vec::new();
+    let mut failures: Vec<(String, String)> = Vec::new();
+    for handle in handles {
+        match handle.await {
+            Ok(Ok(results)) => all_results.extend(results),
+            Ok(Err((name, error))) => failures.push((name, error)),
+            Err(join_error) => failures.push(("engine".into(), join_error.to_string())),
+        }
+    }
+    for (name, error) in &failures {
+        eprintln!("{name}: {error}");
+    }
+
+    output::render(&all_results, args.json, args.with_snippet);
     Ok(())
 }
