@@ -75,9 +75,119 @@ pub(crate) async fn run_engine(
     Ok(results)
 }
 
+/// Cascade merge (the hybrid): per requested engine, SearXNG results come
+/// first; obscura results fill the gap up to `limit`, deduplicating URLs.
+/// An engine listed in `unresponsive` (searxng reported it rate-limited or
+/// captcha-blocked) ignores searxng results entirely and goes pure obscura.
+pub(crate) fn cascade_merge(
+    selected: &[String],
+    limit: usize,
+    searxng: Vec<SearchResult>,
+    unresponsive: &[String],
+    mut obscura: std::collections::HashMap<String, Vec<SearchResult>>,
+) -> Vec<SearchResult> {
+    fn degraded(engine: &str, unresponsive: &[String]) -> bool {
+        // Entries may carry a suffix like "bing (HTTP error 429)".
+        unresponsive.iter().any(|entry| entry.starts_with(engine))
+    }
+
+    let mut out: Vec<SearchResult> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let mut per_engine: std::collections::HashMap<String, Vec<SearchResult>> =
+        std::collections::HashMap::new();
+    for result in searxng {
+        per_engine
+            .entry(result.engine.clone())
+            .or_default()
+            .push(result);
+    }
+
+    for engine in selected {
+        let mut count = 0usize;
+        if !degraded(engine, unresponsive) {
+            if let Some(list) = per_engine.get_mut(engine) {
+                for result in list.drain(..) {
+                    if count >= limit {
+                        break;
+                    }
+                    if seen.insert(result.url.clone()) {
+                        out.push(result);
+                        count += 1;
+                    }
+                }
+            }
+        }
+        if count < limit {
+            if let Some(list) = obscura.get_mut(engine) {
+                for result in list.drain(..) {
+                    if count >= limit {
+                        break;
+                    }
+                    if seen.insert(result.url.clone()) {
+                        out.push(result);
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::encode_query;
+    use super::{cascade_merge, encode_query, SearchResult};
+    use std::collections::HashMap;
+
+    fn result(engine: &str, title: &str, url: &str) -> SearchResult {
+        SearchResult {
+            engine: engine.into(),
+            title: title.into(),
+            url: url.into(),
+            snippet: String::new(),
+        }
+    }
+
+    #[test]
+    fn cascade_prefers_searxng_fills_with_obscura_and_drops_degraded() {
+        let selected = vec!["github".to_string(), "bing".to_string()];
+        let searxng = vec![
+            result("github", "g1", "https://g/1"),
+            result("github", "g2", "https://g/2"),
+            result("bing", "b-stale", "https://b/stale"),
+        ];
+        let mut obscura = HashMap::new();
+        obscura.insert(
+            "github".to_string(),
+            vec![
+                result("github", "g1-dup", "https://g/1"),
+                result("github", "g3", "https://g/3"),
+            ],
+        );
+        obscura.insert(
+            "bing".to_string(),
+            vec![
+                result("bing", "b1", "https://b/1"),
+                result("bing", "b2", "https://b/2"),
+            ],
+        );
+        let unresponsive = vec!["bing (HTTP error 429)".to_string()];
+        let merged = cascade_merge(&selected, 3, searxng, &unresponsive, obscura);
+        let urls: Vec<&str> = merged.iter().map(|r| r.url.as_str()).collect();
+        // github: 2 de searxng + 1 de relleno (dup descartado)
+        // bing: degradado -> resultados solo de obscura, el stale de searxng se descarta
+        assert_eq!(
+            urls,
+            vec![
+                "https://g/1",
+                "https://g/2",
+                "https://g/3",
+                "https://b/1",
+                "https://b/2"
+            ]
+        );
+    }
 
     #[test]
     fn encodes_spaces_as_plus_and_keeps_safe_characters() {

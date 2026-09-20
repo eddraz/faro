@@ -1,0 +1,52 @@
+{
+  "query": "rust programming",
+  "results": [
+    {
+      "title": "Rust Programming Language",
+      "url": "https://www.rust-lang.org/",
+      "content": "A language empowering everyone to build reliable and efficient software.",
+      "engine": "duckduckgo",
+      "engines": [
+        "duckduckgo",
+        "bing"
+      ],
+      "score": 12.5,
+      "parsed_url": [
+        "https",
+        "www.rust-lang.org",
+        "/",
+        "",
+        "",
+        ""
+      ]
+    },
+    {
+      "title": "rust-lang/book",
+      "url": "https://github.com/rust-lang/book",
+      "content": "The Rust Programming Language book, official repository.",
+      "engine": "github",
+      "engines": [
+        "github"
+      ],
+      "score": 8.0
+    },
+    {
+      "title": "Rust (programming language) - Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+      "content": "Rust is a general-purpose programming language emphasizing performance and safety.",
+      "engine": "wikipedia",
+      "engines": [
+        "wikipedia"
+      ],
+      "score": 5.0
+    }
+  ],
+  "answers": [],
+  "infoboxes": [],
+  "suggestions": [
+    "rust programming language book"
+  ],
+  "unresponsive_engines": [
+    "bing (HTTP error 429)"
+  ]
+}

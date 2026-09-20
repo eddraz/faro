@@ -1,13 +1,17 @@
-//! websearch: multi-engine web search CLI powered by the obscura headless browser.
+//! websearch: hybrid multi-engine search CLI (SearXNG first, obscura fallback).
 
 mod bootstrap;
 mod engine;
 mod output;
 mod runner;
+mod searxng;
+
+use std::collections::HashMap;
 
 use clap::{Parser, ValueEnum};
 
-/// Multi-engine web search CLI powered by the obscura headless browser.
+/// Hybrid multi-engine web search CLI: a local SearXNG container answers
+/// first, obscura-backed engines fill the gaps and cover degraded engines.
 #[derive(Parser)]
 #[command(name = "websearch", version, about)]
 struct Args {
@@ -33,6 +37,14 @@ struct Args {
     /// Include snippets in table output (always present in JSON).
     #[arg(long)]
     with_snippet: bool,
+
+    /// Skip SearXNG entirely: query only the obscura-backed engines.
+    #[arg(long)]
+    no_searxng: bool,
+
+    /// Local port where the SearXNG container is published.
+    #[arg(long, default_value_t = searxng::DEFAULT_PORT)]
+    searxng_port: u16,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -60,44 +72,99 @@ impl EngineKind {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let selected: Vec<EngineKind> = if args.engines.is_empty() {
-        vec![
+    let selected: Vec<String> = if args.engines.is_empty() {
+        [
             EngineKind::Github,
             EngineKind::Duckduckgo,
             EngineKind::Bing,
             EngineKind::Yahoo,
             EngineKind::Wikipedia,
         ]
+        .iter()
+        .map(|kind| kind.as_str().to_string())
+        .collect()
     } else {
-        args.engines.clone()
+        args.engines
+            .iter()
+            .map(|kind| kind.as_str().to_string())
+            .collect()
     };
 
     let obscura = bootstrap::ensure_obscura().await?;
+    let mut failures: Vec<(String, String)> = Vec::new();
+    let mut searxng_results: Vec<engine::SearchResult> = Vec::new();
+    let mut unresponsive: Vec<String> = Vec::new();
 
+    // Cascade phase 1: the SearXNG container (started on demand, reused when
+    // already healthy). Any failure here just degrades to pure obscura.
+    if !args.no_searxng {
+        let port = args.searxng_port;
+        match tokio::task::spawn_blocking(move || searxng::ensure_ready(port)).await {
+            Ok(Ok(())) => {
+                let query = args.query.clone();
+                let fetch_limit = args.limit * selected.len();
+                let port = args.searxng_port;
+                match tokio::task::spawn_blocking(move || {
+                    searxng::search(port, &query, None, fetch_limit)
+                })
+                .await
+                {
+                    Ok(Ok(search)) => {
+                        if search.unresponsive_engines.is_empty() {
+                            eprintln!("searxng: {} results", search.results.len());
+                        } else {
+                            eprintln!(
+                                "searxng: {} results; degraded upstream: {}",
+                                search.results.len(),
+                                search.unresponsive_engines.join(", ")
+                            );
+                        }
+                        searxng_results = search.results;
+                        unresponsive = search.unresponsive_engines;
+                    }
+                    Ok(Err(error)) => failures.push(("searxng".into(), error.to_string())),
+                    Err(error) => failures.push(("searxng".into(), error.to_string())),
+                }
+            }
+            Ok(Err(error)) => failures.push(("searxng".into(), error.to_string())),
+            Err(error) => failures.push(("searxng".into(), error.to_string())),
+        }
+    }
+
+    // Cascade phase 2: obscura engines fill the remaining gaps per engine.
     let mut handles = Vec::new();
-    for kind in selected {
+    for kind in &selected {
         let obscura = obscura.clone();
         let query = args.query.clone();
         let limit = args.limit;
         let timeout = args.timeout;
+        let name = kind.as_str().to_string();
         handles.push(tokio::spawn(async move {
-            engine::run_engine(kind.as_str(), &obscura, &query, limit, timeout).await
+            engine::run_engine(&name, &obscura, &query, limit, timeout).await
         }));
     }
 
-    let mut all_results: Vec<engine::SearchResult> = Vec::new();
-    let mut failures: Vec<(String, String)> = Vec::new();
-    for handle in handles {
+    let mut obscura_results: HashMap<String, Vec<engine::SearchResult>> = HashMap::new();
+    for (kind, handle) in selected.iter().zip(handles) {
         match handle.await {
-            Ok(Ok(results)) => all_results.extend(results),
+            Ok(Ok(results)) => {
+                obscura_results.insert(kind.clone(), results);
+            }
             Ok(Err((name, error))) => failures.push((name, error)),
-            Err(join_error) => failures.push(("engine".into(), join_error.to_string())),
+            Err(error) => failures.push(("engine".into(), error.to_string())),
         }
     }
     for (name, error) in &failures {
         eprintln!("{name}: {error}");
     }
 
-    output::render(&all_results, args.json, args.with_snippet);
+    let merged = engine::cascade_merge(
+        &selected,
+        args.limit,
+        searxng_results,
+        &unresponsive,
+        obscura_results,
+    );
+    output::render(&merged, args.json, args.with_snippet);
     Ok(())
 }

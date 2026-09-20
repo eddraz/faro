@@ -1,0 +1,382 @@
+//! SearXNG container lifecycle (rootless podman) and JSON search client.
+
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use anyhow::{anyhow, Context, Result};
+use serde::Deserialize;
+
+use crate::engine::SearchResult;
+
+pub(crate) const CONTAINER_NAME: &str = "searxng";
+pub(crate) const IMAGE: &str = "docker.io/searxng/searxng:latest";
+pub(crate) const DEFAULT_PORT: u16 = 8888;
+const HEALTH_TIMEOUT: Duration = Duration::from_millis(300);
+const STARTUP_BUDGET: Duration = Duration::from_secs(30);
+
+/// Locate a program on PATH.
+fn which(program: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+}
+
+pub(crate) fn podman_path() -> Option<PathBuf> {
+    which("podman")
+}
+
+/// Install `package` with sudo via the detected package manager, printing
+/// the command first so the mutation is always visible to the user.
+fn sudo_install(package: &str) -> Result<()> {
+    let (manager, dnf_package): (&str, &str) = if which("apt-get").is_some() {
+        ("apt-get", package)
+    } else if which("dnf").is_some() {
+        // On Fedora the pasta binary ships in the `passt` package.
+        ("dnf", if package == "pasta" { "passt" } else { package })
+    } else {
+        return Err(anyhow!(
+            "{package} is missing and no supported package manager (apt-get/dnf) was found; \
+             install it manually"
+        ));
+    };
+    eprintln!("running: sudo {manager} install -y {dnf_package} (sudo may ask for your password)");
+    let status = std::process::Command::new("sudo")
+        .arg(manager)
+        .args(["install", "-y", dnf_package])
+        .status()
+        .context("failed to execute sudo")?;
+    if !status.success() {
+        return Err(anyhow!(
+            "{package} installation failed ({status}); install it manually and retry"
+        ));
+    }
+    Ok(())
+}
+
+/// Install podman with sudo via the detected package manager.
+fn install_podman() -> Result<()> {
+    sudo_install("podman")?;
+    if podman_path().is_none() {
+        return Err(anyhow!(
+            "podman was installed but is still not on PATH; open a new shell and retry"
+        ));
+    }
+    Ok(())
+}
+
+/// Rootless podman 5.x configures container networking with pasta; without
+/// it `podman run` fails with exit 127.
+fn ensure_pasta() -> Result<()> {
+    if which("pasta").is_some() {
+        return Ok(());
+    }
+    sudo_install("pasta")?;
+    if which("pasta").is_none() {
+        return Err(anyhow!(
+            "pasta was installed but is still not on PATH; open a new shell and retry"
+        ));
+    }
+    Ok(())
+}
+
+/// Guarantee podman is available, installing it on first run if necessary.
+pub(crate) fn ensure_podman() -> Result<PathBuf> {
+    if let Some(path) = podman_path() {
+        return Ok(path);
+    }
+    install_podman()?;
+    podman_path().ok_or_else(|| anyhow!("podman still not on PATH after installation"))
+}
+
+/// ~/apps/searxng
+fn app_dir() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join("apps").join("searxng")
+}
+
+/// Minimal settings.yml that unlocks the JSON API for local use.
+/// `use_default_settings` keeps everything else at upstream defaults.
+fn settings_yml(secret_key: &str) -> String {
+    format!(
+        "use_default_settings: true\n\
+         server:\n\
+         \x20 secret_key: \"{secret_key}\"\n\
+         \x20 limiter: false\n\
+         \x20 public_instance: false\n\
+         search:\n\
+         \x20 formats:\n\
+         \x20   - html\n\
+         \x20   - json\n"
+    )
+}
+
+fn random_secret() -> String {
+    let mut bytes = [0u8; 16];
+    if let Ok(mut file) = std::fs::File::open("/dev/urandom") {
+        if file.read_exact(&mut bytes).is_ok() {
+            return bytes.iter().map(|b| format!("{b:02x}")).collect();
+        }
+    }
+    // Fallback without /dev/urandom: weak but unique-enough per machine.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{nanos:032x}")
+}
+
+/// Create ~/apps/searxng/config/settings.yml once; never clobber user edits.
+fn ensure_config(dir: &Path) -> Result<PathBuf> {
+    let config_dir = dir.join("config");
+    std::fs::create_dir_all(&config_dir)
+        .with_context(|| format!("cannot create {}", config_dir.display()))?;
+    let settings = config_dir.join("settings.yml");
+    if !settings.exists() {
+        std::fs::write(&settings, settings_yml(&random_secret()))
+            .with_context(|| format!("cannot write {}", settings.display()))?;
+        eprintln!("wrote {}", settings.display());
+    }
+    Ok(config_dir)
+}
+
+/// Pure builder for `podman run` arguments (unit-testable).
+fn run_args(config_dir: &Path, data_dir: &Path, port: u16) -> Vec<String> {
+    vec![
+        "run".into(),
+        "-d".into(),
+        "--name".into(),
+        CONTAINER_NAME.into(),
+        "-p".into(),
+        format!("127.0.0.1:{port}:8080"),
+        "-v".into(),
+        format!("{}:/etc/searxng", config_dir.display()),
+        "-v".into(),
+        format!("{}:/var/cache/searxng", data_dir.display()),
+        IMAGE.into(),
+    ]
+}
+
+fn container_exists(podman: &Path) -> bool {
+    std::process::Command::new(podman)
+        .args(["container", "exists", CONTAINER_NAME])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+fn image_exists(podman: &Path) -> bool {
+    std::process::Command::new(podman)
+        .args(["image", "exists", IMAGE])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+fn start_container(podman: &Path, port: u16) -> Result<()> {
+    ensure_pasta()?;
+
+    if container_exists(podman) {
+        eprintln!("starting existing searxng container...");
+        let status = std::process::Command::new(podman)
+            .args(["start", CONTAINER_NAME])
+            .status()
+            .context("failed to run podman start")?;
+        if !status.success() {
+            return Err(anyhow!("podman start searxng failed ({status})"));
+        }
+        return Ok(());
+    }
+
+    if !image_exists(podman) {
+        eprintln!("pulling {IMAGE} (first run only)...");
+        let status = std::process::Command::new(podman)
+            .args(["pull", IMAGE])
+            .status()
+            .context("failed to run podman pull")?;
+        if !status.success() {
+            return Err(anyhow!("podman pull {IMAGE} failed ({status})"));
+        }
+    }
+
+    let dir = app_dir();
+    let config_dir = ensure_config(&dir)?;
+    let data_dir = dir.join("data");
+    std::fs::create_dir_all(&data_dir)
+        .with_context(|| format!("cannot create {}", data_dir.display()))?;
+
+    eprintln!("creating searxng container on 127.0.0.1:{port}...");
+    let status = std::process::Command::new(podman)
+        .args(run_args(&config_dir, &data_dir, port))
+        .status()
+        .context("failed to run podman run")?;
+    if !status.success() {
+        return Err(anyhow!("podman run searxng failed ({status})"));
+    }
+    Ok(())
+}
+
+fn healthy(port: u16) -> bool {
+    ureq::get(&format!("http://127.0.0.1:{port}/healthz"))
+        .timeout(HEALTH_TIMEOUT)
+        .call()
+        .map(|response| response.status() == 200)
+        .unwrap_or(false)
+}
+
+/// Wait until /healthz answers OK, bounded by `budget`.
+fn wait_healthy(port: u16, budget: Duration) -> Result<()> {
+    let started = std::time::Instant::now();
+    while started.elapsed() < budget {
+        if healthy(port) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err(anyhow!(
+        "searxng did not become healthy within {}s",
+        budget.as_secs()
+    ))
+}
+
+/// Ensure the SearXNG container is reachable: healthy check first (cheap),
+/// then podman presence, image, container creation/start and health wait.
+pub(crate) fn ensure_ready(port: u16) -> Result<()> {
+    if healthy(port) {
+        return Ok(());
+    }
+    let podman = ensure_podman()?;
+    start_container(&podman, port)?;
+    wait_healthy(port, STARTUP_BUDGET)
+}
+
+#[derive(Deserialize)]
+struct SearxngResponse {
+    #[serde(default)]
+    results: Vec<SearxngResult>,
+    /// Upstream engines that failed (rate limit, captcha, timeout). Their
+    /// results are missing from `results`, so coverage silently degrades;
+    /// the cascade uses this to route those engines to the obscura fallback.
+    #[serde(default)]
+    unresponsive_engines: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct SearxngResult {
+    title: String,
+    url: String,
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    engines: Vec<String>,
+}
+
+/// One SearXNG API response: results plus the upstream engines that failed.
+pub(crate) struct SearxngSearch {
+    pub(crate) results: Vec<SearchResult>,
+    /// Source engines that answered with rate limits/captchas this time.
+    pub(crate) unresponsive_engines: Vec<String>,
+}
+
+pub(crate) fn parse_search(json: &str) -> Result<SearxngSearch> {
+    let response: SearxngResponse =
+        serde_json::from_str(json).context("invalid searxng JSON response")?;
+    let results = response
+        .results
+        .into_iter()
+        .map(|result| SearchResult {
+            // Attribute each result to its real source engine (searxng reports
+            // which engines produced it); fall back to "searxng" itself.
+            engine: result
+                .engines
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "searxng".to_string()),
+            title: result.title,
+            url: result.url,
+            snippet: result.content,
+        })
+        .collect();
+    Ok(SearxngSearch {
+        results,
+        unresponsive_engines: response.unresponsive_engines,
+    })
+}
+
+/// Query the local SearXNG instance for the JSON API results.
+pub(crate) fn search(
+    port: u16,
+    query: &str,
+    engines: Option<&[String]>,
+    limit: usize,
+) -> Result<SearxngSearch> {
+    let mut url = format!(
+        "http://127.0.0.1:{port}/search?q={}&format=json",
+        crate::engine::encode_query(query)
+    );
+    if let Some(engines) = engines {
+        url.push_str("&engines=");
+        url.push_str(&engines.join(","));
+    }
+    let response = ureq::get(&url)
+        .timeout(Duration::from_secs(30))
+        .call()
+        .map_err(|error| anyhow!("searxng query failed: {error}"))?;
+    if response.status() != 200 {
+        return Err(anyhow!("searxng returned HTTP {}", response.status()));
+    }
+    let body = response
+        .into_string()
+        .context("failed to read searxng response body")?;
+    let mut search = parse_search(&body)?;
+    search.results.truncate(limit);
+    Ok(search)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_unlock_json_api_and_disable_limiter() {
+        let yaml = settings_yml("abc123");
+        assert!(yaml.contains("secret_key: \"abc123\""));
+        assert!(yaml.contains("limiter: false"));
+        assert!(yaml.contains("public_instance: false"));
+        assert!(yaml.contains("- json"));
+        assert!(yaml.contains("use_default_settings: true"));
+    }
+
+    #[test]
+    fn run_args_bind_localhost_and_mount_volumes() {
+        let args = run_args(
+            Path::new("/home/u/apps/searxng/config"),
+            Path::new("/home/u/apps/searxng/data"),
+            8888,
+        );
+        let joined = args.join(" ");
+        assert!(joined.contains("--name searxng"));
+        assert!(joined.contains("-p 127.0.0.1:8888:8080"));
+        assert!(joined.contains("/home/u/apps/searxng/config:/etc/searxng"));
+        assert!(joined.contains("/home/u/apps/searxng/data:/var/cache/searxng"));
+        assert!(joined.ends_with(IMAGE));
+    }
+
+    #[test]
+    fn parses_fixture_and_reports_unresponsive_engines() {
+        let json = include_str!("../tests/fixtures/searxng.json");
+        let search = parse_search(json).expect("valid fixture");
+        assert_eq!(search.results.len(), 3);
+        assert_eq!(search.results[0].engine, "duckduckgo");
+        assert_eq!(search.results[1].engine, "github");
+        assert_eq!(
+            search.results[2].url,
+            "https://en.wikipedia.org/wiki/Rust_(programming_language)"
+        );
+        assert!(!search.results[0].snippet.is_empty());
+        assert_eq!(search.unresponsive_engines, vec!["bing (HTTP error 429)"]);
+    }
+}
