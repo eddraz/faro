@@ -93,9 +93,9 @@ fn requires_searxng_name(engine: &str) -> bool {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
+    // Default display order: web results first, github repos last.
     let mut selected: Vec<String> = if args.engines.is_empty() {
         [
-            EngineKind::Github,
             EngineKind::Duckduckgo,
             EngineKind::Bing,
             EngineKind::Yahoo,
@@ -103,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
             EngineKind::Google,
             EngineKind::Brave,
             EngineKind::Qwant,
+            EngineKind::Github,
         ]
         .iter()
         .map(|kind| kind.as_str().to_string())
