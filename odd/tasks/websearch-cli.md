@@ -51,4 +51,7 @@ validated search engines and print aggregated results.
 
 ## Evidence
 
-(to be filled per task: commit hashes, test run output)
+- Implementation route deviation: harness subagent worktree binding was broken (session born while the repo had zero commits, bound to the parent /home/eddraz clone); all subagent_run attempts failed. User authorized inline implementation (documented deviation), executed through the serena MCP editing surface.
+- Task 1-5: all source files under src/, fixtures under tests/fixtures/ built from real captures. `cargo build` green, `cargo test` 12/12 passed (parser fixtures per engine, bootstrap asset mapping, query encoding, runner fail-fast).
+- Task 6: end-to-end smoke `cargo run -- "rust programming" --limit 3` returned results from all five engines; `--json` and `--with-snippet` verified.
+- Commits: sliced for review budget: a8a5e18 (bootstrap+runner), 9727fc2 (engines+parsers+output), this commit (docs/chores).

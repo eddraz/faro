@@ -1,0 +1,8 @@
+# Local Pi runtime state
+.atl/
+
+# Serena language-server session state
+.serena/
+
+# Rust build artifacts
+/target
