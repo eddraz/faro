@@ -13,8 +13,11 @@ Run one query across five validated search engines and print aggregated results 
 | `bing` | `www.bing.com/search?q={query}` | keeps `/ck/a` tracking URLs |
 | `yahoo` | `search.yahoo.com/search?p={query}` | keeps `r.search.yahoo.com` redirects |
 | `wikipedia` | `en.wikipedia.org/w/index.php?search={query}` | MediaWiki full-text search |
+| `google` | via SearXNG only | blocks headless browsers; served through the container |
+| `brave` | via SearXNG only | same |
+| `qwant` | via SearXNG only | same; no obscura fallback |
 
-Google, Brave, Ecosia, Yandex, Startpage and Qwant are intentionally excluded: they CAPTCHA-block headless traffic or render results through async APIs that never land in the DOM.
+Ecosia, Yandex and Startpage remain excluded: they CAPTCHA-block both paths or render results through async APIs that never land in the DOM.
 
 ## Install
 
@@ -49,7 +52,7 @@ Options:
 
 | Flag | Effect |
 |---|---|
-| `--engine <NAME>` | repeatable filter: `github`, `duckduckgo`, `bing`, `yahoo`, `wikipedia` |
+| `--engine <NAME>` | repeatable filter: `github`, `duckduckgo`, `bing`, `yahoo`, `wikipedia`, `google`, `brave`, `qwant` |
 | `--limit <N>` | max results per engine (default 10) |
 | `--json` | machine-readable JSON (always includes snippets) |
 | `--with-snippet` | include snippets in table output |

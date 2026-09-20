@@ -34,7 +34,22 @@ try one source, then the next, obscura last.
    obscura fill with URL dedup, --no-searxng and --searxng-port flags.
 3. [ ] Real smoke: container up via podman, query through the hybrid path, verify
    results and fallback (stop container -> verify autostart; --no-searxng path).
-4. [ ] README update + evidence + work-unit commits.
+4. [x] README update + evidence + work-unit commits.
+5. [ ] SearXNG-only engines: add google, brave, qwant to EngineKind; searxng
+       phase passes the requested engine set to the API (engines= param);
+       obscura phase skips them; --no-searxng warns and skips them.
+6. [ ] Cascade test for searxng-only engines (healthy + degraded), real smoke
+       with --engine google,brave,qwant and default run coverage.
+7. [x] README/feature-doc evidence + work-unit commits.
+
+## Evidence (v2: searxng-only engines)
+
+- 18/18 tests green incl. cascade tolerance for searxng-only engines (healthy + degraded).
+- Real smoke: `--engine google --engine brave --engine qwant` returned google and brave
+  results through the container; qwant degraded (CAPTCHA) and correctly yielded nothing
+  (no obscura fallback exists for it). `--no-searxng --engine google` warns and skips.
+- Default engine set now includes google/brave/qwant; with `--no-searxng` they are
+  skipped with a warning, keeping pure-obscura runs intact.
 
 ## Evidence
 

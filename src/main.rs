@@ -54,6 +54,11 @@ enum EngineKind {
     Bing,
     Yahoo,
     Wikipedia,
+    /// SearXNG-only: upstream engines that block headless browsers, served
+    /// through the local SearXNG container with no obscura fallback.
+    Google,
+    Brave,
+    Qwant,
 }
 
 impl EngineKind {
@@ -64,21 +69,40 @@ impl EngineKind {
             EngineKind::Bing => "bing",
             EngineKind::Yahoo => "yahoo",
             EngineKind::Wikipedia => "wikipedia",
+            EngineKind::Google => "google",
+            EngineKind::Brave => "brave",
+            EngineKind::Qwant => "qwant",
         }
     }
+
+    /// True for engines the obscura path cannot serve at all.
+    fn requires_searxng(self) -> bool {
+        matches!(
+            self,
+            EngineKind::Google | EngineKind::Brave | EngineKind::Qwant
+        )
+    }
+}
+
+/// String-level mirror of EngineKind::requires_searxng for selected names.
+fn requires_searxng_name(engine: &str) -> bool {
+    matches!(engine, "google" | "brave" | "qwant")
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let selected: Vec<String> = if args.engines.is_empty() {
+    let mut selected: Vec<String> = if args.engines.is_empty() {
         [
             EngineKind::Github,
             EngineKind::Duckduckgo,
             EngineKind::Bing,
             EngineKind::Yahoo,
             EngineKind::Wikipedia,
+            EngineKind::Google,
+            EngineKind::Brave,
+            EngineKind::Qwant,
         ]
         .iter()
         .map(|kind| kind.as_str().to_string())
@@ -89,6 +113,28 @@ async fn main() -> anyhow::Result<()> {
             .map(|kind| kind.as_str().to_string())
             .collect()
     };
+
+    // SearXNG-only engines cannot run without the container: warn and skip
+    // them instead of failing the whole run.
+    if args.no_searxng {
+        let searxng_only: Vec<String> = selected
+            .iter()
+            .filter(|engine| {
+                args.engines
+                    .iter()
+                    .find(|kind| kind.as_str() == *engine)
+                    .is_some_and(|kind| kind.requires_searxng())
+            })
+            .cloned()
+            .collect();
+        if !searxng_only.is_empty() {
+            eprintln!(
+                "{} require the SearXNG container; skipping (drop --no-searxng to use them)",
+                searxng_only.join(", ")
+            );
+            selected.retain(|engine| !searxng_only.contains(engine));
+        }
+    }
 
     let obscura = bootstrap::ensure_obscura().await?;
     let mut failures: Vec<(String, String)> = Vec::new();
@@ -102,10 +148,11 @@ async fn main() -> anyhow::Result<()> {
         match tokio::task::spawn_blocking(move || searxng::ensure_ready(port)).await {
             Ok(Ok(())) => {
                 let query = args.query.clone();
+                let engines = selected.clone();
                 let fetch_limit = args.limit * selected.len();
                 let port = args.searxng_port;
                 match tokio::task::spawn_blocking(move || {
-                    searxng::search(port, &query, None, fetch_limit)
+                    searxng::search(port, &query, Some(&engines), fetch_limit)
                 })
                 .await
                 {
@@ -132,8 +179,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Cascade phase 2: obscura engines fill the remaining gaps per engine.
+    // SearXNG-only engines have no obscura parser and are skipped here.
     let mut handles = Vec::new();
     for kind in &selected {
+        if requires_searxng_name(kind) {
+            continue;
+        }
         let obscura = obscura.clone();
         let query = args.query.clone();
         let limit = args.limit;

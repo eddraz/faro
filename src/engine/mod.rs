@@ -150,6 +150,29 @@ mod tests {
     }
 
     #[test]
+    fn cascade_tolerates_searxng_only_engines() {
+        let selected = vec!["google".to_string()];
+        // Healthy: searxng results survive with no obscura fallback present.
+        let merged = cascade_merge(
+            &selected,
+            3,
+            vec![result("google", "g", "https://google/r1")],
+            &[],
+            HashMap::new(),
+        );
+        assert_eq!(merged.len(), 1);
+        // Degraded: zero results and no panic.
+        let merged = cascade_merge(
+            &selected,
+            3,
+            Vec::new(),
+            &["google (CAPTCHA)".to_string()],
+            HashMap::new(),
+        );
+        assert!(merged.is_empty());
+    }
+
+    #[test]
     fn cascade_prefers_searxng_fills_with_obscura_and_drops_degraded() {
         let selected = vec!["github".to_string(), "bing".to_string()];
         let searxng = vec![
