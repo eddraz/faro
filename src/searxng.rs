@@ -29,26 +29,59 @@ pub(crate) fn podman_path() -> Option<PathBuf> {
 
 /// Install `package` with sudo via the detected package manager, printing
 /// the command first so the mutation is always visible to the user.
-fn sudo_install(package: &str) -> Result<()> {
-    // Distro package-name mapping: the pasta binary ships in the `passt`
-    // package on both Debian (apt) and Fedora (dnf).
+/// Decide how to install `package` with the available package managers:
+/// returns (program, needs_sudo, args). The pasta binary ships in the
+/// `passt` package on apt, dnf and Homebrew alike; Homebrew refuses sudo.
+fn install_plan(
+    package: &str,
+    probe: &dyn Fn(&str) -> bool,
+) -> Option<(String, bool, Vec<String>)> {
     let package = if package == "pasta" { "passt" } else { package };
-    let (manager, package): (&str, &str) = if which("apt-get").is_some() {
-        ("apt-get", package)
-    } else if which("dnf").is_some() {
-        ("dnf", package)
+    if probe("apt-get") {
+        Some((
+            "apt-get".into(),
+            true,
+            vec!["install".into(), "-y".into(), package.into()],
+        ))
+    } else if probe("dnf") {
+        Some((
+            "dnf".into(),
+            true,
+            vec!["install".into(), "-y".into(), package.into()],
+        ))
+    } else if probe("brew") {
+        Some(("brew".into(), false, vec!["install".into(), package.into()]))
     } else {
+        None
+    }
+}
+
+/// Install `package` via the detected package manager, printing the command
+/// first so the mutation is always visible to the user.
+fn sudo_install(package: &str) -> Result<()> {
+    let Some((program, needs_sudo, args)) =
+        install_plan(package, &|program| which(program).is_some())
+    else {
         return Err(anyhow!(
-            "{package} is missing and no supported package manager (apt-get/dnf) was found; \
-             install it manually"
+            "{package} is missing and no supported package manager (apt-get/dnf/brew) was \
+             found; install it manually"
         ));
     };
-    eprintln!("running: sudo {manager} install -y {package} (sudo may ask for your password)");
-    let status = std::process::Command::new("sudo")
-        .arg(manager)
-        .args(["install", "-y", package])
+    let mut command =
+        std::process::Command::new(if needs_sudo { "sudo" } else { program.as_str() });
+    if needs_sudo {
+        command.arg(&program);
+        eprintln!(
+            "running: sudo {program} {} (sudo may ask for your password)",
+            args.join(" ")
+        );
+    } else {
+        eprintln!("running: {program} {}", args.join(" "));
+    }
+    let status = command
+        .args(&args)
         .status()
-        .context("failed to execute sudo")?;
+        .with_context(|| format!("failed to execute {program}"))?;
     if !status.success() {
         return Err(anyhow!(
             "{package} installation failed ({status}); install it manually and retry"
@@ -172,16 +205,79 @@ fn run_args(config_dir: &Path, data_dir: &Path, port: u16, network: Option<&str>
 /// Choose the rootless network backend at container creation time: pasta is
 /// podman's default; slirp4netns is used when pasta is absent; pasta is
 /// auto-installed (visible sudo) only when neither backend exists.
+/// Pure decision for Linux networking backends: None = podman default
+/// (pasta), Some = explicit backend, Err = neither helper is installed.
+fn linux_network_choice(pasta: bool, slirp: bool) -> Result<Option<&'static str>, ()> {
+    if pasta {
+        Ok(None)
+    } else if slirp {
+        Ok(Some("slirp4netns"))
+    } else {
+        Err(())
+    }
+}
+
+/// Choose the container networking backend at creation time. Linux-only
+/// logic: pasta is podman's default, slirp4netns is the fallback and pasta
+/// is auto-installed (visible sudo) when both are absent. On macOS the
+/// podman machine owns networking, so no flag is needed.
 fn resolve_network() -> Result<Option<&'static str>> {
-    if which("pasta").is_some() {
+    if !cfg!(target_os = "linux") {
         return Ok(None);
     }
-    if which("slirp4netns").is_some() {
-        eprintln!("pasta not found; using slirp4netns for container networking");
-        return Ok(Some("slirp4netns"));
+    match linux_network_choice(which("pasta").is_some(), which("slirp4netns").is_some()) {
+        Ok(Some(backend)) => {
+            eprintln!("pasta not found; using slirp4netns for container networking");
+            Ok(Some(backend))
+        }
+        Ok(None) => Ok(None),
+        Err(()) => {
+            ensure_pasta()?;
+            Ok(None)
+        }
     }
-    ensure_pasta()?;
-    Ok(None)
+}
+
+/// On macOS podman runs containers inside a managed Linux VM; make sure it
+/// is initialized and running before touching the container.
+#[cfg(target_os = "macos")]
+fn ensure_podman_machine(podman: &Path) -> Result<()> {
+    let reachable = std::process::Command::new(podman)
+        .arg("info")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if reachable {
+        return Ok(());
+    }
+    eprintln!("podman machine not running; starting it (first boot can take a minute)...");
+    let listing = std::process::Command::new(podman)
+        .args(["machine", "list", "--format", "{{.Name}}"])
+        .output()
+        .context("failed to run podman machine list")?;
+    if String::from_utf8_lossy(&listing.stdout).trim().is_empty() {
+        let status = std::process::Command::new(podman)
+            .args(["machine", "init"])
+            .status()
+            .context("failed to run podman machine init")?;
+        if !status.success() {
+            return Err(anyhow!("podman machine init failed ({status})"));
+        }
+    }
+    let status = std::process::Command::new(podman)
+        .args(["machine", "start"])
+        .status()
+        .context("failed to run podman machine start")?;
+    if !status.success() {
+        return Err(anyhow!("podman machine start failed ({status})"));
+    }
+    Ok(())
+}
+
+/// Linux manages containers directly; there is no podman machine layer.
+#[cfg(not(target_os = "macos"))]
+fn ensure_podman_machine(_podman: &Path) -> Result<()> {
+    Ok(())
 }
 
 fn container_exists(podman: &Path) -> bool {
@@ -272,6 +368,7 @@ pub(crate) fn ensure_ready(port: u16) -> Result<()> {
         return Ok(());
     }
     let podman = ensure_podman()?;
+    ensure_podman_machine(&podman)?;
     start_container(&podman, port)?;
     wait_healthy(port, STARTUP_BUDGET)
 }
@@ -392,6 +489,34 @@ pub(crate) fn search(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linux_network_choice_prefers_pasta_then_slirp() {
+        assert!(matches!(linux_network_choice(true, false), Ok(None)));
+        assert!(matches!(
+            linux_network_choice(false, true),
+            Ok(Some("slirp4netns"))
+        ));
+        assert!(matches!(linux_network_choice(true, true), Ok(None)));
+        assert!(linux_network_choice(false, false).is_err());
+    }
+
+    #[test]
+    fn install_plan_maps_packages_and_managers() {
+        let (program, sudo, args) = install_plan("podman", &|p| p == "apt-get").expect("apt plan");
+        assert_eq!(program, "apt-get");
+        assert!(sudo);
+        assert_eq!(args, vec!["install", "-y", "podman"]);
+
+        // The pasta binary ships as the `passt` package, and Homebrew
+        // refuses sudo.
+        let (program, sudo, args) = install_plan("pasta", &|p| p == "brew").expect("brew plan");
+        assert_eq!(program, "brew");
+        assert!(!sudo);
+        assert_eq!(args, vec!["install", "passt"]);
+
+        assert!(install_plan("podman", &|_| false).is_none());
+    }
 
     #[test]
     fn settings_unlock_json_api_and_disable_limiter() {

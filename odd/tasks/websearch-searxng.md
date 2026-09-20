@@ -42,6 +42,10 @@ try one source, then the next, obscura last.
        with --engine google,brave,qwant and default run coverage.
 7. [x] README/feature-doc evidence + work-unit commits.
 
+8. [ ] macOS hardening: network logic Linux-only (podman machine owns
+       networking on macOS), Homebrew in the install plan without sudo,
+       podman machine detection/start, unit tests for the pure decisions.
+
 ## Evidence (v2: searxng-only engines)
 
 - 18/18 tests green incl. cascade tolerance for searxng-only engines (healthy + degraded).
