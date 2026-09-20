@@ -42,9 +42,16 @@ try one source, then the next, obscura last.
        with --engine google,brave,qwant and default run coverage.
 7. [x] README/feature-doc evidence + work-unit commits.
 
-8. [ ] macOS hardening: network logic Linux-only (podman machine owns
+8. [x] macOS hardening: network logic Linux-only (podman machine owns
        networking on macOS), Homebrew in the install plan without sudo,
        podman machine detection/start, unit tests for the pure decisions.
+       Commit ebe3e8d.
+9. [x] Wikipedia engine: fulltext=1 in the search URL — MediaWiki was
+       redirecting near-exact queries to the article itself (search=rust
+       landed on iron-oxide) producing zero results. Commit 2372e5e.
+       Note: the SearXNG wikipedia engine currently returns empty results
+       (upstream integration issue, infobox-only responses); the cascade
+       covers wikipedia through the obscura fill meanwhile.
 
 ## Evidence (v2: searxng-only engines)
 
