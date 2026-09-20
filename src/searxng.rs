@@ -30,21 +30,23 @@ pub(crate) fn podman_path() -> Option<PathBuf> {
 /// Install `package` with sudo via the detected package manager, printing
 /// the command first so the mutation is always visible to the user.
 fn sudo_install(package: &str) -> Result<()> {
-    let (manager, dnf_package): (&str, &str) = if which("apt-get").is_some() {
+    // Distro package-name mapping: the pasta binary ships in the `passt`
+    // package on both Debian (apt) and Fedora (dnf).
+    let package = if package == "pasta" { "passt" } else { package };
+    let (manager, package): (&str, &str) = if which("apt-get").is_some() {
         ("apt-get", package)
     } else if which("dnf").is_some() {
-        // On Fedora the pasta binary ships in the `passt` package.
-        ("dnf", if package == "pasta" { "passt" } else { package })
+        ("dnf", package)
     } else {
         return Err(anyhow!(
             "{package} is missing and no supported package manager (apt-get/dnf) was found; \
              install it manually"
         ));
     };
-    eprintln!("running: sudo {manager} install -y {dnf_package} (sudo may ask for your password)");
+    eprintln!("running: sudo {manager} install -y {package} (sudo may ask for your password)");
     let status = std::process::Command::new("sudo")
         .arg(manager)
-        .args(["install", "-y", dnf_package])
+        .args(["install", "-y", package])
         .status()
         .context("failed to execute sudo")?;
     if !status.success() {
@@ -144,12 +146,18 @@ fn ensure_config(dir: &Path) -> Result<PathBuf> {
 }
 
 /// Pure builder for `podman run` arguments (unit-testable).
-fn run_args(config_dir: &Path, data_dir: &Path, port: u16) -> Vec<String> {
-    vec![
+fn run_args(config_dir: &Path, data_dir: &Path, port: u16, network: Option<&str>) -> Vec<String> {
+    let mut args = vec![
         "run".into(),
         "-d".into(),
         "--name".into(),
         CONTAINER_NAME.into(),
+    ];
+    if let Some(network) = network {
+        args.push("--network".into());
+        args.push(network.into());
+    }
+    args.extend([
         "-p".into(),
         format!("127.0.0.1:{port}:8080"),
         "-v".into(),
@@ -157,7 +165,23 @@ fn run_args(config_dir: &Path, data_dir: &Path, port: u16) -> Vec<String> {
         "-v".into(),
         format!("{}:/var/cache/searxng", data_dir.display()),
         IMAGE.into(),
-    ]
+    ]);
+    args
+}
+
+/// Choose the rootless network backend at container creation time: pasta is
+/// podman's default; slirp4netns is used when pasta is absent; pasta is
+/// auto-installed (visible sudo) only when neither backend exists.
+fn resolve_network() -> Result<Option<&'static str>> {
+    if which("pasta").is_some() {
+        return Ok(None);
+    }
+    if which("slirp4netns").is_some() {
+        eprintln!("pasta not found; using slirp4netns for container networking");
+        return Ok(Some("slirp4netns"));
+    }
+    ensure_pasta()?;
+    Ok(None)
 }
 
 fn container_exists(podman: &Path) -> bool {
@@ -177,8 +201,6 @@ fn image_exists(podman: &Path) -> bool {
 }
 
 fn start_container(podman: &Path, port: u16) -> Result<()> {
-    ensure_pasta()?;
-
     if container_exists(podman) {
         eprintln!("starting existing searxng container...");
         let status = std::process::Command::new(podman)
@@ -208,9 +230,10 @@ fn start_container(podman: &Path, port: u16) -> Result<()> {
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("cannot create {}", data_dir.display()))?;
 
+    let network = resolve_network()?;
     eprintln!("creating searxng container on 127.0.0.1:{port}...");
     let status = std::process::Command::new(podman)
-        .args(run_args(&config_dir, &data_dir, port))
+        .args(run_args(&config_dir, &data_dir, port, network))
         .status()
         .context("failed to run podman run")?;
     if !status.success() {
@@ -356,12 +379,27 @@ mod tests {
             Path::new("/home/u/apps/searxng/config"),
             Path::new("/home/u/apps/searxng/data"),
             8888,
+            None,
         );
         let joined = args.join(" ");
         assert!(joined.contains("--name searxng"));
         assert!(joined.contains("-p 127.0.0.1:8888:8080"));
         assert!(joined.contains("/home/u/apps/searxng/config:/etc/searxng"));
         assert!(joined.contains("/home/u/apps/searxng/data:/var/cache/searxng"));
+        assert!(joined.ends_with(IMAGE));
+        assert!(!joined.contains("--network"));
+    }
+
+    #[test]
+    fn run_args_support_fallback_network_backend() {
+        let args = run_args(
+            Path::new("/cfg"),
+            Path::new("/data"),
+            8888,
+            Some("slirp4netns"),
+        );
+        let joined = args.join(" ");
+        assert!(joined.contains("--network slirp4netns"));
         assert!(joined.ends_with(IMAGE));
     }
 
