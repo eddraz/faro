@@ -5,46 +5,58 @@ mod engine;
 mod output;
 mod runner;
 mod searxng;
+mod update;
 
 use std::collections::HashMap;
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// Hybrid multi-engine web search CLI: a local SearXNG container answers
 /// first, obscura-backed engines fill the gaps and cover degraded engines.
 #[derive(Parser)]
 #[command(name = "faro", version, about)]
 struct Args {
-    /// Search query (e.g. "rust programming").
-    query: String,
+    #[command(subcommand)]
+    command: Command,
+}
 
-    /// Engines to query (repeatable). Defaults to all validated engines.
-    #[arg(long = "engine", value_enum)]
-    engines: Vec<EngineKind>,
+#[derive(Subcommand)]
+enum Command {
+    /// Search the web across multiple engines.
+    Search {
+        /// Search query (e.g. "rust programming").
+        query: String,
 
-    /// Maximum results per engine.
-    #[arg(long, default_value_t = 10)]
-    limit: usize,
+        /// Engines to query (repeatable). Defaults to all validated engines.
+        #[arg(long = "engine", value_enum)]
+        engines: Vec<EngineKind>,
 
-    /// Emit machine-readable JSON instead of a table.
-    #[arg(long)]
-    json: bool,
+        /// Maximum results per engine.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
 
-    /// Per-engine fetch timeout in seconds.
-    #[arg(long, default_value_t = 60)]
-    timeout: u64,
+        /// Emit machine-readable JSON instead of a table.
+        #[arg(long)]
+        json: bool,
 
-    /// Include snippets in table output (always present in JSON).
-    #[arg(long)]
-    with_snippet: bool,
+        /// Per-engine fetch timeout in seconds.
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
 
-    /// Skip SearXNG entirely: query only the obscura-backed engines.
-    #[arg(long)]
-    no_searxng: bool,
+        /// Include snippets in table output (always present in JSON).
+        #[arg(long)]
+        with_snippet: bool,
 
-    /// Local port where the SearXNG container is published.
-    #[arg(long, default_value_t = searxng::DEFAULT_PORT)]
-    searxng_port: u16,
+        /// Skip SearXNG entirely: query only the obscura-backed engines.
+        #[arg(long)]
+        no_searxng: bool,
+
+        /// Local port where the SearXNG container is published.
+        #[arg(long, default_value_t = searxng::DEFAULT_PORT)]
+        searxng_port: u16,
+    },
+    /// Update faro to the latest release.
+    Update,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -89,10 +101,46 @@ fn requires_searxng_name(engine: &str) -> bool {
     matches!(engine, "google" | "brave" | "qwant")
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let args = Args::parse();
+#[derive(Clone)]
+struct SearchArgs {
+    query: String,
+    engines: Vec<EngineKind>,
+    limit: usize,
+    json: bool,
+    timeout: u64,
+    with_snippet: bool,
+    no_searxng: bool,
+    searxng_port: u16,
+}
 
+impl From<Command> for SearchArgs {
+    fn from(command: Command) -> Self {
+        match command {
+            Command::Search {
+                query,
+                engines,
+                limit,
+                json,
+                timeout,
+                with_snippet,
+                no_searxng,
+                searxng_port,
+            } => Self {
+                query,
+                engines,
+                limit,
+                json,
+                timeout,
+                with_snippet,
+                no_searxng,
+                searxng_port,
+            },
+            Command::Update => unreachable!("update is handled separately"),
+        }
+    }
+}
+
+async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     // Default display order: web results first, github repos last.
     let mut selected: Vec<String> = if args.engines.is_empty() {
         [
@@ -219,4 +267,14 @@ async fn main() -> anyhow::Result<()> {
     );
     output::render(&merged, args.json, args.with_snippet);
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    match args.command {
+        Command::Search { .. } => run_search(args.command.into()).await,
+        Command::Update => update::run(),
+    }
 }
