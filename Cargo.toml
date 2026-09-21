@@ -1,12 +1,13 @@
 [package]
 name = "faro"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Hybrid multi-engine web search CLI: one query across 8 engines, powered by obscura and SearXNG"
 license = "MIT"
 repository = "https://github.com/eddraz/faro"
 keywords = ["search", "cli", "searxng", "scraping", "osint"]
 categories = ["command-line-utilities", "web-programming"]
+exclude = ["odd"]
 
 [[bin]]
 name = "faro"
