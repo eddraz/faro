@@ -33,22 +33,25 @@ cargo build --release
 
 ```bash
 # Query every engine (default limit: 10 per engine)
-faro "rust programming"
+faro search "rust programming"
 
 # Only some engines, tighter limit
-faro "rust programming" --engine github --engine wikipedia --limit 3
+faro search "rust programming" --engine github --engine wikipedia --limit 3
 
 # JSON output
-faro "rust programming" --json
+faro search "rust programming" --json
 
 # Table with snippets
-faro "rust programming" --with-snippet
+faro search "rust programming" --with-snippet
 
 # Per-engine fetch timeout
-faro "rust programming" --timeout 30
+faro search "rust programming" --timeout 30
 ```
 
-Options:
+> Note: faro now uses subcommands. The old bare form `faro "query"` became
+> `faro search "query"`.
+
+Options (all under `search`):
 
 | Flag | Effect |
 |---|---|
@@ -59,6 +62,19 @@ Options:
 | `--timeout <SECS>` | per-engine fetch timeout (default 60) |
 
 Engines that fail (network, blockpage, timeout) print one error line to stderr and never sink the run.
+
+## Updating
+
+```bash
+faro update
+```
+
+Checks the latest release of [faro](https://github.com/eddraz/faro) on GitHub, compares it against the running version, and if newer downloads the matching prebuilt tarball and atomically replaces the running binary (temp file + rename, safe on Linux/macOS). Reports "up to date" and exits 0 when the latest release is not newer.
+
+Requirements:
+
+- Releases must ship a tarball named after the platform: `faro-x86_64-linux.tar.gz`, `faro-aarch64-linux.tar.gz`, `faro-x86_64-macos.tar.gz`, `faro-aarch64-macos.tar.gz`, each containing a `faro` binary.
+- Supported platforms: Linux x86_64/aarch64, macOS x86_64/aarch64.
 
 ## Hybrid mode: SearXNG first, obscura fallback
 
