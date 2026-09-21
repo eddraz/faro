@@ -1,8 +1,8 @@
 # faro
 
-Multi-engine web search CLI powered by the [obscura](https://github.com/h4ckf0r0day/obscura) headless browser.
+Hybrid multi-engine web search CLI powered by a local [SearXNG](https://docs.searxng.org/) container and the [obscura](https://github.com/h4ckf0r0day/obscura) headless browser.
 
-Run one query across five validated search engines and print aggregated results as a table or JSON.
+Run one query across eight search engines and print aggregated results as a table or JSON.
 
 ## Engines
 
@@ -21,13 +21,21 @@ Ecosia, Yandex and Startpage remain excluded: they CAPTCHA-block both paths or r
 
 ## Install
 
-On first run the CLI looks for `obscura` on `PATH` (then `~/.local/bin`); if missing, it downloads the matching release tarball from obscura's GitHub releases and installs it there. Supported platforms: Linux x86_64/aarch64, macOS x86_64/aarch64.
+From crates.io (requires a Rust toolchain):
+
+```bash
+cargo install faro
+```
+
+Or grab a prebuilt binary from the [latest release](https://github.com/eddraz/faro/releases/latest) — `faro-x86_64-linux.tar.gz`, `faro-aarch64-linux.tar.gz`, `faro-x86_64-macos.tar.gz` or `faro-aarch64-macos.tar.gz` — and put the `faro` binary on your `PATH`. Installed binaries can upgrade themselves with `faro update`.
 
 Build from source:
 
 ```bash
 cargo build --release
 ```
+
+On first run the CLI looks for `obscura` on `PATH` (then `~/.local/bin`); if missing, it downloads the matching release tarball from obscura's GitHub releases and installs it there. Supported platforms: Linux x86_64/aarch64, macOS x86_64/aarch64.
 
 ## Usage
 
@@ -60,6 +68,8 @@ Options (all under `search`):
 | `--json` | machine-readable JSON (always includes snippets) |
 | `--with-snippet` | include snippets in table output |
 | `--timeout <SECS>` | per-engine fetch timeout (default 60) |
+| `--no-searxng` | skip SearXNG entirely: pure obscura path |
+| `--searxng-port <PORT>` | local port for the SearXNG container (default 8888) |
 
 Engines that fail (network, blockpage, timeout) print one error line to stderr and never sink the run.
 
