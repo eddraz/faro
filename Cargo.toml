@@ -19,7 +19,7 @@ strip = true
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 flate2 = "1"
 percent-encoding = "2"
 scraper = "0.20"

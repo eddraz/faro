@@ -66,10 +66,12 @@ Options (all under `search`):
 | `--engine <NAME>` | repeatable filter: `github`, `duckduckgo`, `bing`, `yahoo`, `wikipedia`, `google`, `brave`, `qwant` |
 | `--limit <N>` | max results per engine (default 10) |
 | `--json` | machine-readable JSON (always includes snippets) |
+| `--markdown` | emit results formatted as Markdown links and blockquotes |
 | `--with-snippet` | include snippets in table output |
 | `--timeout <SECS>` | per-engine fetch timeout (default 60) |
 | `--no-searxng` | skip SearXNG entirely: pure obscura path |
 | `--searxng-port <PORT>` | local port for the SearXNG container (default 8888) |
+| `--searxng-url <URL>` | external SearXNG instance URL (env `FARO_SEARXNG_URL`); skips local container |
 
 Engines that fail (network, blockpage, timeout) print one error line to stderr and never sink the run.
 
@@ -88,16 +90,18 @@ Requirements:
 
 ## Hybrid mode: SearXNG first, obscura fallback
 
-By default the CLI runs a local [SearXNG](https://docs.searxng.org/) container (rootless podman) and asks it first: one HTTP call covers every engine with normalized JSON. When SearXNG reports an upstream engine as unresponsive (rate limit, CAPTCHA — it lists them in `unresponsive_engines`), that engine skips SearXNG and its results come from the obscura path instead. Engines that return too few results get obscura fill-up with URL dedup.
+By default the CLI queries a local [SearXNG](https://docs.searxng.org/) container (rootless podman or docker) and asks it first: one HTTP call covers every engine with normalized JSON. Obscura is executed **lazily**: headless browser processes are only launched for engines that SearXNG reported as degraded (`unresponsive_engines`) or that returned fewer results than `--limit`. URL deduplication canonicalizes URLs, automatically stripping tracking query parameters (`utm_*`, `fbclid`, etc.).
 
-Container lifecycle (only when the SearXNG path is taken):
+Alternatively, point directly to an existing SearXNG instance without running a local container using `--searxng-url https://my-searxng.example.com` or the `FARO_SEARXNG_URL` environment variable.
+
+Container lifecycle (only when the local SearXNG container path is taken):
 
 - healthy check on `http://127.0.0.1:8888/healthz` — reuse if OK
-- stopped container: `podman start searxng`
+- stopped container: `podman start searxng` (or `docker start searxng`)
 - missing container: image pull, `settings.yml` written once (JSON API enabled, limiter off), container created bound to `127.0.0.1:8888`
-- podman itself is auto-installed with visible sudo if missing (apt/dnf); container networking prefers pasta, falls back to slirp4netns, or installs pasta (package `passt`) as a last resort
+- prefers `podman`, falling back to `docker` if present; if neither exists, podman is auto-installed with visible sudo (apt/dnf); container networking prefers pasta, falls back to slirp4netns, or installs pasta (package `passt`) as a last resort
 
-Flags: `--no-searxng` (pure obscura), `--searxng-port <PORT>` (default 8888).
+Flags: `--no-searxng` (pure obscura), `--searxng-port <PORT>` (default 8888), `--searxng-url <URL>`.
 
 ## How it works
 
