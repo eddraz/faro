@@ -14,16 +14,13 @@ pub const REMOTE_GGUF_URL: &str =
 pub const REMOTE_TOKENIZER_URL: &str =
     "https://huggingface.co/LiquidAI/LFM2.5-230M/resolve/main/tokenizer.json";
 
-/// Returns ~/models or fallback to .cache/faro/models
+/// Returns ~/models as the standard models directory.
 pub fn default_models_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
-        let dir = PathBuf::from(&home).join("models");
-        if dir.is_dir() {
-            return dir;
-        }
-        return PathBuf::from(&home).join(".cache").join("faro").join("models");
+        PathBuf::from(&home).join("models")
+    } else {
+        PathBuf::from("models")
     }
-    PathBuf::from(".models")
 }
 
 /// Find a GGUF model file: checks custom override, then standard locations.
@@ -35,16 +32,9 @@ pub fn find_gguf_model(custom: Option<&Path>) -> Option<PathBuf> {
         return None;
     }
 
-    if let Some(home) = std::env::var_os("HOME") {
-        let candidate = PathBuf::from(home).join("models").join(DEFAULT_MODEL_NAME);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-
-    let cache_candidate = default_models_dir().join(DEFAULT_MODEL_NAME);
-    if cache_candidate.is_file() {
-        return Some(cache_candidate);
+    let candidate = default_models_dir().join(DEFAULT_MODEL_NAME);
+    if candidate.is_file() {
+        return Some(candidate);
     }
 
     None

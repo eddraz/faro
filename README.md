@@ -89,7 +89,7 @@ faro ask "Explain quantum computing" --model ~/models/my-model.gguf --llama-port
 
 1. **Tier 1 (`llama-server`)**: Checks if the GGUF model file exists (`LFM2.5-230M-F16.gguf` by default in `~/models` or custom `--model`). If present, queries a local `llama-server` process (starting it automatically if not already running).
 2. **Tier 2 (`candle` fallback)**: If the GGUF model is not found or `llama-server` fails, inference falls back to in-process Candle execution.
-3. **Automatic Weight Verification**: Before invoking Candle, the CLI verifies if the required model weights and tokenizer exist on disk; if missing, it automatically downloads them from Hugging Face into `~/.cache/faro/models`.
+3. **Automatic Weight Verification**: Before invoking Candle, the CLI verifies if the required model weights and tokenizer exist on disk; if missing, it automatically downloads them from Hugging Face into `~/models`.
 
 Options (under `ask`):
 
