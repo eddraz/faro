@@ -51,27 +51,23 @@ pub fn resolve_model_path(name_or_path: &Path) -> PathBuf {
     name_or_path.to_path_buf()
 }
 
-/// Resolve target model file, port, and display name.
+/// Resolve target model file and port for LFM2.5.
 pub fn resolve_model_and_port(
     custom: Option<&Path>,
     explicit_port: Option<u16>,
-) -> (PathBuf, u16, &'static str) {
+) -> (PathBuf, u16) {
+    let port = explicit_port.unwrap_or(crate::ai::llama::PORT_LFM25);
     if let Some(path) = custom {
-        let resolved = resolve_model_path(path);
-        let path_str = resolved.to_string_lossy().to_lowercase();
-        let (default_port, name) = if path_str.contains("k2") || path_str.contains("horizon") {
-            (crate::ai::llama::PORT_K2, "K2")
-        } else if path_str.contains("bge") || path_str.contains("embed") {
-            (crate::ai::llama::PORT_EMBEDDINGS, "embeddings")
-        } else {
-            (crate::ai::llama::PORT_LFM25, "LFM2.5")
-        };
-        let port = explicit_port.unwrap_or(default_port);
-        (resolved, port, name)
+        if path.is_file() {
+            return (path.to_path_buf(), port);
+        }
+        let in_models = default_models_dir().join(path);
+        if in_models.is_file() {
+            return (in_models, port);
+        }
+        (path.to_path_buf(), port)
     } else {
-        let model_path = default_models_dir().join(DEFAULT_MODEL_NAME);
-        let port = explicit_port.unwrap_or(crate::ai::llama::PORT_LFM25);
-        (model_path, port, "LFM2.5")
+        (default_models_dir().join(DEFAULT_MODEL_NAME), port)
     }
 }
 
@@ -184,24 +180,13 @@ mod tests {
 
     #[test]
     fn resolve_model_and_port_maps_correctly() {
-        // Defaults
-        let (path, port, name) = resolve_model_and_port(None, None);
+        // Defaults to LFM2.5 and port 43211
+        let (path, port) = resolve_model_and_port(None, None);
         assert_eq!(port, 43211);
-        assert_eq!(name, "LFM2.5");
         assert!(path.to_string_lossy().contains(DEFAULT_MODEL_NAME));
 
-        // K2 alias
-        let (_k2_path, k2_port, k2_name) = resolve_model_and_port(Some(Path::new("k2")), None);
-        assert_eq!(k2_port, 43212);
-        assert_eq!(k2_name, "K2");
-
-        // Embeddings alias
-        let (_emb_path, emb_port, emb_name) = resolve_model_and_port(Some(Path::new("embeddings")), None);
-        assert_eq!(emb_port, 43210);
-        assert_eq!(emb_name, "embeddings");
-
         // Explicit port override
-        let (_custom_path, custom_port, _name) = resolve_model_and_port(None, Some(9999));
+        let (_custom_path, custom_port) = resolve_model_and_port(None, Some(9999));
         assert_eq!(custom_port, 9999);
     }
 }

@@ -78,24 +78,20 @@ Engines that fail (network, blockpage, timeout) print one error line to stderr a
 ## AI Synthesis: `faro ask`
 
 ```bash
-# Ask a question: searches the web and synthesizes an answer with citations
+# Ask a question: searches the web and synthesizes an answer with citations using LFM2.5
 faro ask "How does ownership work in Rust?"
 
-# Custom GGUF model or llama-server port (supports aliases like --model k2)
-faro ask "Explain quantum computing" --model k2
-faro ask "Explain quantum computing" --model ~/models/my-model.gguf --llama-port 43212
+# Custom GGUF model or llama-server port
+faro ask "Explain quantum computing" --model ~/models/LFM2.5-230M-F16.gguf --llama-port 43211
 ```
 
-`faro ask` executes a smart two-tier LLM inference cascade:
+`faro ask` executes a smart two-tier LLM inference cascade using **LFM2.5**:
 
 1. **Tier 1 (`llama-server` / `llama-serve`)**:
    - First verifies if `llama-server` or `llama-serve` exists on the system.
-   - Probes known dedicated ports to avoid duplicate server instances:
-     - **Port 43210**: Embeddings (`bge-m3-q8_0.gguf`)
-     - **Port 43211**: LFM2.5 (`LFM2.5-230M-F16.gguf` — default for fast synthesis)
-     - **Port 43212**: K2 (`K2-Horizon-1B-BF16.gguf`)
-   - If the target port is already active, queries it directly without re-spawning ("not called twice").
-   - If inactive, verifies if the GGUF model exists in `~/models` and starts a background `llama-server` instance.
+   - Probes the dedicated **LFM2.5 port 43211** to avoid duplicate server instances:
+     - If port 43211 is already active, queries it directly without re-spawning ("not called twice").
+     - If inactive, verifies if the GGUF model exists in `~/models` (`LFM2.5-230M-F16.gguf` by default) and starts a background `llama-server` instance.
 2. **Tier 2 (`candle` fallback)**:
    - If the GGUF model does not exist or `llama-server` is unavailable/fails, inference falls back to in-process Candle execution.
    - **Automatic Weight Verification**: Before invoking Candle, verifies if model weights and tokenizer exist on disk; if missing, automatically downloads them from Hugging Face into `~/models`.
@@ -105,8 +101,8 @@ Options (under `ask`):
 | Flag | Effect |
 |---|---|
 | `--limit <N>` | max search results per engine for context (default 3) |
-| `--model <PATH>` | override path or alias (`k2`, `lfm`, `embeddings`) to GGUF model file (env `FARO_MODEL`) |
-| `--llama-port <PORT>` | port for `llama-server` (defaults to 43211 for LFM2.5, 43212 for K2) |
+| `--model <PATH>` | override path to GGUF model file (env `FARO_MODEL`) |
+| `--llama-port <PORT>` | port for `llama-server` (defaults to 43211 for LFM2.5) |
 | `--engine <NAME>` | repeatable engine filter (same as `search`) |
 | `--no-searxng` | skip SearXNG entirely (pure obscura path) |
 | `--searxng-url <URL>` | external SearXNG instance URL |

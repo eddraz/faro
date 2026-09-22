@@ -41,6 +41,8 @@ fn which(program: &str) -> Option<PathBuf> {
     None
 }
 
+pub const PORT_LFM25: u16 = 43211;
+
 /// Probe the /health endpoint of llama-server.
 pub fn probe_health(base_url: &str) -> bool {
     ureq::get(&format!("{base_url}/health"))
@@ -50,40 +52,9 @@ pub fn probe_health(base_url: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub const PORT_EMBEDDINGS: u16 = 43210;
-pub const PORT_LFM25: u16 = 43211;
-pub const PORT_K2: u16 = 43212;
-
-#[derive(Debug, Clone)]
-pub struct ServerPortStatus {
-    pub port: u16,
-    pub name: &'static str,
-    pub model_name: &'static str,
-    pub is_active: bool,
-}
-
-/// Check status of known ports (43210 for embeddings, 43211 for LFM2.5, 43212 for K2).
-pub fn check_known_ports() -> Vec<ServerPortStatus> {
-    vec![
-        ServerPortStatus {
-            port: PORT_EMBEDDINGS,
-            name: "embeddings",
-            model_name: "bge-m3-q8_0.gguf",
-            is_active: probe_health(&format!("http://127.0.0.1:{PORT_EMBEDDINGS}")),
-        },
-        ServerPortStatus {
-            port: PORT_LFM25,
-            name: "LFM2.5",
-            model_name: "LFM2.5-230M-F16.gguf",
-            is_active: probe_health(&format!("http://127.0.0.1:{PORT_LFM25}")),
-        },
-        ServerPortStatus {
-            port: PORT_K2,
-            name: "K2",
-            model_name: "K2-Horizon-1B-BF16.gguf",
-            is_active: probe_health(&format!("http://127.0.0.1:{PORT_K2}")),
-        },
-    ]
+/// Check if the LFM2.5 llama-server is currently active on its dedicated port.
+pub fn is_lfm_active(port: u16) -> bool {
+    probe_health(&format!("http://127.0.0.1:{port}"))
 }
 
 #[cfg(unix)]
@@ -194,19 +165,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn known_ports_are_configured_as_expected() {
-        assert_eq!(PORT_EMBEDDINGS, 43210);
+    fn lfm_port_is_configured_as_expected() {
         assert_eq!(PORT_LFM25, 43211);
-        assert_eq!(PORT_K2, 43212);
-
-        let ports = check_known_ports();
-        assert_eq!(ports.len(), 3);
-        assert_eq!(ports[0].port, 43210);
-        assert_eq!(ports[0].name, "embeddings");
-        assert_eq!(ports[1].port, 43211);
-        assert_eq!(ports[1].name, "LFM2.5");
-        assert_eq!(ports[2].port, 43212);
-        assert_eq!(ports[2].name, "K2");
     }
 }
 

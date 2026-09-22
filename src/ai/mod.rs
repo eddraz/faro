@@ -62,29 +62,20 @@ pub fn synthesize(
     // Step 1: Verify if llama-server / llama-serve exists on the system
     let llama_binary = llama::find_llama_server();
     if let Some(ref binary) = llama_binary {
-        // Check if known ports are already active to avoid calling/spawning twice
-        let known_ports = llama::check_known_ports();
-        eprintln!("checking llama-server ports:");
-        for p in &known_ports {
-            eprintln!(
-                "  - port {} ({} / {}): {}",
-                p.port,
-                p.name,
-                p.model_name,
-                if p.is_active { "active" } else { "inactive" }
-            );
-        }
-
-        // Determine target model, port and name
-        let (target_model_path, target_port, model_name) =
+        // Determine target model and port (LFM2.5 on port 43211 by default)
+        let (target_model_path, target_port) =
             model::resolve_model_and_port(custom_model, llama_port);
 
-        let port_url = format!("http://127.0.0.1:{target_port}");
-        let already_active = llama::probe_health(&port_url);
+        // Probe only the LFM2.5 port to avoid duplicate execution
+        let already_active = llama::is_lfm_active(target_port);
+        eprintln!(
+            "probing llama-server LFM2.5 on port {target_port}: {}",
+            if already_active { "active" } else { "inactive" }
+        );
 
         if already_active {
             eprintln!(
-                "llama-server already active on port {target_port} ({model_name}); reusing instance (will not call twice)..."
+                "llama-server already active on port {target_port} (LFM2.5); reusing instance (will not call twice)..."
             );
             match llama::generate(target_port, SYSTEM_PROMPT, &user_prompt, DEFAULT_MAX_TOKENS) {
                 Ok(answer) => return Ok(answer),
