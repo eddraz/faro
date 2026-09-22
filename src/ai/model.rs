@@ -9,6 +9,10 @@ use anyhow::{anyhow, Context, Result};
 pub const DEFAULT_MODEL_NAME: &str = "LFM2.5-230M-F16.gguf";
 pub const DEFAULT_TOKENIZER_NAME: &str = "LFM2.5-tokenizer.json";
 
+pub const MODEL_LFM25: &str = "LFM2.5-230M-F16.gguf";
+pub const MODEL_K2: &str = "K2-Horizon-1B-BF16.gguf";
+pub const MODEL_EMBEDDINGS: &str = "bge-m3-q8_0.gguf";
+
 pub const REMOTE_GGUF_URL: &str =
     "https://huggingface.co/LiquidAI/LFM2.5-230M-GGUF/resolve/main/LFM2.5-230M-F16.gguf";
 pub const REMOTE_TOKENIZER_URL: &str =
@@ -23,11 +27,60 @@ pub fn default_models_dir() -> PathBuf {
     }
 }
 
+/// Resolve a model alias (e.g. "k2", "lfm") or path to an existing or expected model PathBuf.
+pub fn resolve_model_path(name_or_path: &Path) -> PathBuf {
+    if name_or_path.is_file() {
+        return name_or_path.to_path_buf();
+    }
+    let lower = name_or_path.to_string_lossy().to_lowercase();
+    let file_name = if lower == "k2" || lower == "k2-horizon" {
+        MODEL_K2
+    } else if lower == "lfm" || lower == "lfm2.5" {
+        MODEL_LFM25
+    } else if lower == "bge" || lower == "embeddings" {
+        MODEL_EMBEDDINGS
+    } else {
+        name_or_path.file_name().and_then(|f| f.to_str()).unwrap_or("")
+    };
+
+    let in_models = default_models_dir().join(file_name);
+    if in_models.is_file() {
+        return in_models;
+    }
+
+    name_or_path.to_path_buf()
+}
+
+/// Resolve target model file, port, and display name.
+pub fn resolve_model_and_port(
+    custom: Option<&Path>,
+    explicit_port: Option<u16>,
+) -> (PathBuf, u16, &'static str) {
+    if let Some(path) = custom {
+        let resolved = resolve_model_path(path);
+        let path_str = resolved.to_string_lossy().to_lowercase();
+        let (default_port, name) = if path_str.contains("k2") || path_str.contains("horizon") {
+            (crate::ai::llama::PORT_K2, "K2")
+        } else if path_str.contains("bge") || path_str.contains("embed") {
+            (crate::ai::llama::PORT_EMBEDDINGS, "embeddings")
+        } else {
+            (crate::ai::llama::PORT_LFM25, "LFM2.5")
+        };
+        let port = explicit_port.unwrap_or(default_port);
+        (resolved, port, name)
+    } else {
+        let model_path = default_models_dir().join(DEFAULT_MODEL_NAME);
+        let port = explicit_port.unwrap_or(crate::ai::llama::PORT_LFM25);
+        (model_path, port, "LFM2.5")
+    }
+}
+
 /// Find a GGUF model file: checks custom override, then standard locations.
 pub fn find_gguf_model(custom: Option<&Path>) -> Option<PathBuf> {
     if let Some(path) = custom {
-        if path.is_file() {
-            return Some(path.to_path_buf());
+        let resolved = resolve_model_path(path);
+        if resolved.is_file() {
+            return Some(resolved);
         }
         return None;
     }
@@ -127,5 +180,28 @@ mod tests {
     fn find_gguf_model_respects_custom_when_missing() {
         let non_existent = Path::new("/path/that/does/not/exist/model.gguf");
         assert_eq!(find_gguf_model(Some(non_existent)), None);
+    }
+
+    #[test]
+    fn resolve_model_and_port_maps_correctly() {
+        // Defaults
+        let (path, port, name) = resolve_model_and_port(None, None);
+        assert_eq!(port, 43211);
+        assert_eq!(name, "LFM2.5");
+        assert!(path.to_string_lossy().contains(DEFAULT_MODEL_NAME));
+
+        // K2 alias
+        let (_k2_path, k2_port, k2_name) = resolve_model_and_port(Some(Path::new("k2")), None);
+        assert_eq!(k2_port, 43212);
+        assert_eq!(k2_name, "K2");
+
+        // Embeddings alias
+        let (_emb_path, emb_port, emb_name) = resolve_model_and_port(Some(Path::new("embeddings")), None);
+        assert_eq!(emb_port, 43210);
+        assert_eq!(emb_name, "embeddings");
+
+        // Explicit port override
+        let (_custom_path, custom_port, _name) = resolve_model_and_port(None, Some(9999));
+        assert_eq!(custom_port, 9999);
     }
 }

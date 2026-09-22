@@ -50,46 +50,85 @@ pub fn probe_health(base_url: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub struct ServerGuard {
-    child: Option<std::process::Child>,
+pub const PORT_EMBEDDINGS: u16 = 43210;
+pub const PORT_LFM25: u16 = 43211;
+pub const PORT_K2: u16 = 43212;
+
+#[derive(Debug, Clone)]
+pub struct ServerPortStatus {
+    pub port: u16,
+    pub name: &'static str,
+    pub model_name: &'static str,
+    pub is_active: bool,
 }
 
-impl Drop for ServerGuard {
-    fn drop(&mut self) {
-        if let Some(ref mut child) = self.child {
-            let _ = child.kill();
-        }
-    }
+/// Check status of known ports (43210 for embeddings, 43211 for LFM2.5, 43212 for K2).
+pub fn check_known_ports() -> Vec<ServerPortStatus> {
+    vec![
+        ServerPortStatus {
+            port: PORT_EMBEDDINGS,
+            name: "embeddings",
+            model_name: "bge-m3-q8_0.gguf",
+            is_active: probe_health(&format!("http://127.0.0.1:{PORT_EMBEDDINGS}")),
+        },
+        ServerPortStatus {
+            port: PORT_LFM25,
+            name: "LFM2.5",
+            model_name: "LFM2.5-230M-F16.gguf",
+            is_active: probe_health(&format!("http://127.0.0.1:{PORT_LFM25}")),
+        },
+        ServerPortStatus {
+            port: PORT_K2,
+            name: "K2",
+            model_name: "K2-Horizon-1B-BF16.gguf",
+            is_active: probe_health(&format!("http://127.0.0.1:{PORT_K2}")),
+        },
+    ]
 }
 
-/// Ensure llama-server is healthy on `port`, spawning if necessary.
-pub fn ensure_server(model_path: &Path, port: u16) -> Result<ServerGuard> {
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
+#[cfg(unix)]
+extern "C" {
+    fn setsid() -> i32;
+}
+
+/// Ensure llama-server is healthy on `port`, spawning detached if necessary.
+pub fn ensure_server(binary: &Path, model_path: &Path, port: u16) -> Result<()> {
     let base_url = format!("http://127.0.0.1:{port}");
     if probe_health(&base_url) {
-        return Ok(ServerGuard { child: None });
+        eprintln!("llama-server already active on port {port}; reusing instance (will not spawn again).");
+        return Ok(());
     }
-
-    let binary = find_llama_server().ok_or_else(|| {
-        anyhow!("neither llama-server nor llama-serve found on PATH or in ~/.local/bin")
-    })?;
 
     eprintln!(
         "starting llama-server with {} on port {port}...",
         model_path.display()
     );
-    let child = std::process::Command::new(&binary)
-        .args([
-            "-m",
-            &model_path.to_string_lossy(),
-            "--port",
-            &port.to_string(),
-            "-c",
-            "4096",
-            "--log-disable",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+    let mut cmd = std::process::Command::new(binary);
+    cmd.args([
+        "-m",
+        &model_path.to_string_lossy(),
+        "--port",
+        &port.to_string(),
+        "-c",
+        "4096",
+        "--log-disable",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            setsid();
+            Ok(())
+        });
+    }
+
+    let _child = cmd
         .spawn()
         .with_context(|| format!("failed to spawn {}", binary.display()))?;
 
@@ -98,27 +137,25 @@ pub fn ensure_server(model_path: &Path, port: u16) -> Result<ServerGuard> {
     let budget = Duration::from_secs(15);
     while start.elapsed() < budget {
         if probe_health(&base_url) {
-            eprintln!("llama-server is ready.");
-            return Ok(ServerGuard { child: Some(child) });
+            eprintln!("llama-server is ready on port {port}.");
+            return Ok(());
         }
         std::thread::sleep(Duration::from_millis(300));
     }
 
     Err(anyhow!(
-        "llama-server did not become healthy within {}s",
+        "llama-server on port {port} did not become healthy within {}s",
         budget.as_secs()
     ))
 }
 
-/// Request a chat completion from llama-server.
+/// Request a chat completion from llama-server on `port`.
 pub fn generate(
-    model_path: &Path,
     port: u16,
     system: &str,
     user: &str,
     max_tokens: usize,
 ) -> Result<String> {
-    let _guard = ensure_server(model_path, port)?;
     let url = format!("http://127.0.0.1:{port}/v1/chat/completions");
 
     let payload = json!({
@@ -135,7 +172,7 @@ pub fn generate(
         .set("Content-Type", "application/json")
         .timeout(Duration::from_secs(60))
         .send_string(&json_body)
-        .map_err(|e| anyhow!("llama-server chat request failed: {e}"))?;
+        .map_err(|e| anyhow!("llama-server chat request failed on port {port}: {e}"))?;
 
     let value: Value = serde_json::from_reader(response.into_reader())
         .context("failed to parse llama-server JSON response")?;
@@ -151,3 +188,25 @@ pub fn generate(
 
     Ok(content.trim().to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_ports_are_configured_as_expected() {
+        assert_eq!(PORT_EMBEDDINGS, 43210);
+        assert_eq!(PORT_LFM25, 43211);
+        assert_eq!(PORT_K2, 43212);
+
+        let ports = check_known_ports();
+        assert_eq!(ports.len(), 3);
+        assert_eq!(ports[0].port, 43210);
+        assert_eq!(ports[0].name, "embeddings");
+        assert_eq!(ports[1].port, 43211);
+        assert_eq!(ports[1].name, "LFM2.5");
+        assert_eq!(ports[2].port, 43212);
+        assert_eq!(ports[2].name, "K2");
+    }
+}
+

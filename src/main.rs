@@ -99,9 +99,9 @@ enum Command {
         #[arg(long, env = "FARO_MODEL")]
         model: Option<std::path::PathBuf>,
 
-        /// Override port for llama-server.
-        #[arg(long, default_value_t = 8080)]
-        llama_port: u16,
+        /// Override port for llama-server (defaults to 43211 for LFM2.5 or 43212 for K2).
+        #[arg(long)]
+        llama_port: Option<u16>,
     },
     /// Update faro to the latest release.
     Update,
@@ -380,7 +380,7 @@ async fn run_ask(
     query: String,
     args: SearchArgs,
     model: Option<std::path::PathBuf>,
-    llama_port: u16,
+    llama_port: Option<u16>,
 ) -> anyhow::Result<()> {
     eprintln!("faro: searching web across engines for context...");
     let results = fetch_search_results(&args).await?;
