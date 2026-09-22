@@ -1,5 +1,6 @@
 //! faro: hybrid multi-engine search CLI (SearXNG first, obscura fallback).
 
+mod ai;
 mod bootstrap;
 mod engine;
 mod output;
@@ -63,6 +64,44 @@ enum Command {
         /// Skips local container startup.
         #[arg(long, env = "FARO_SEARXNG_URL")]
         searxng_url: Option<String>,
+    },
+    /// Search the web and synthesize an AI-generated answer using a local LLM.
+    Ask {
+        /// Question or topic to ask (e.g. "What is Rust ownership?").
+        query: String,
+
+        /// Engines to query (repeatable). Defaults to all validated engines.
+        #[arg(long = "engine", value_enum)]
+        engines: Vec<EngineKind>,
+
+        /// Maximum results per engine to feed into context.
+        #[arg(long, default_value_t = 3)]
+        limit: usize,
+
+        /// Per-engine fetch timeout in seconds.
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
+
+        /// Skip SearXNG entirely: query only the obscura-backed engines.
+        #[arg(long)]
+        no_searxng: bool,
+
+        /// Local port where the SearXNG container is published.
+        #[arg(long, default_value_t = searxng::DEFAULT_PORT)]
+        searxng_port: u16,
+
+        /// External SearXNG instance URL (e.g. "http://localhost:8888").
+        /// Skips local container startup.
+        #[arg(long, env = "FARO_SEARXNG_URL")]
+        searxng_url: Option<String>,
+
+        /// Override path to the GGUF model file.
+        #[arg(long, env = "FARO_MODEL")]
+        model: Option<std::path::PathBuf>,
+
+        /// Override port for llama-server.
+        #[arg(long, default_value_t = 8080)]
+        llama_port: u16,
     },
     /// Update faro to the latest release.
     Update,
@@ -151,11 +190,12 @@ impl From<Command> for SearchArgs {
                 searxng_url,
             },
             Command::Update => unreachable!("update is handled separately"),
+            Command::Ask { .. } => unreachable!("ask is handled separately"),
         }
     }
 }
 
-async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
+async fn fetch_search_results(args: &SearchArgs) -> anyhow::Result<Vec<engine::SearchResult>> {
     // Default display order: web results first, github repos last.
     let mut selected: Vec<String> = if args.engines.is_empty() {
         [
@@ -318,14 +358,42 @@ async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         eprintln!("{name}: {error}");
     }
 
-    let merged = engine::cascade_merge(
+    Ok(engine::cascade_merge(
         &selected,
         args.limit,
         searxng_results,
         &unresponsive,
         obscura_results,
-    );
-    output::render(&merged, args.json, args.markdown, args.with_snippet);
+    ))
+}
+
+async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
+    let json = args.json;
+    let markdown = args.markdown;
+    let with_snippet = args.with_snippet;
+    let results = fetch_search_results(&args).await?;
+    output::render(&results, json, markdown, with_snippet);
+    Ok(())
+}
+
+async fn run_ask(
+    query: String,
+    args: SearchArgs,
+    model: Option<std::path::PathBuf>,
+    llama_port: u16,
+) -> anyhow::Result<()> {
+    eprintln!("faro: searching web across engines for context...");
+    let results = fetch_search_results(&args).await?;
+    let answer = ai::synthesize(&query, &results, model.as_deref(), llama_port)?;
+
+    println!("\n{answer}\n");
+
+    if !results.is_empty() {
+        println!("--- Sources ---");
+        for (i, r) in results.iter().enumerate() {
+            println!("[{}] {} — {} ({})", i + 1, r.title, r.url, r.engine);
+        }
+    }
     Ok(())
 }
 
@@ -335,6 +403,31 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Command::Search { .. } => run_search(args.command.into()).await,
+        Command::Ask {
+            query,
+            engines,
+            limit,
+            timeout,
+            no_searxng,
+            searxng_port,
+            searxng_url,
+            model,
+            llama_port,
+        } => {
+            let search_args = SearchArgs {
+                query: query.clone(),
+                engines,
+                limit,
+                json: false,
+                markdown: false,
+                timeout,
+                with_snippet: true,
+                no_searxng,
+                searxng_port,
+                searxng_url,
+            };
+            run_ask(query, search_args, model, llama_port).await
+        }
         Command::Update => update::run(),
     }
 }
