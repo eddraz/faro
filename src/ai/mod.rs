@@ -9,6 +9,7 @@
 pub mod candle;
 pub mod llama;
 pub mod model;
+pub mod sagaz;
 
 use std::path::Path;
 
