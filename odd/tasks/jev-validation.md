@@ -49,3 +49,4 @@ sagaz filter logic and thresholds.
   precedence verified by code reading (jev branch before validate).
 - Pending: full live validation with a real `TYPESAFE_API_KEY` (env empty).
 - Commit: 199087c
+- PR: #10 (base feat/sagaz-validation, chained on #8/#6), closes issue #9, label type:feature
