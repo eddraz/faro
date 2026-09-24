@@ -73,6 +73,7 @@ Options (all under `search`):
 | `--searxng-port <PORT>` | local port for the SearXNG container (default 8888) |
 | `--searxng-url <URL>` | external SearXNG instance URL (env `FARO_SEARXNG_URL`); skips local container |
 | `--validate`, `--sagaz` | validate semantic relevance and filter duplicate results using local `sagaz` (Laya / JEV) |
+| `--jev` | validate semantic relevance and filter duplicate results using TypeSafe JEV (cloud System One model) |
 
 Engines that fail (network, blockpage, timeout) print one error line to stderr and never sink the run.
 
@@ -111,6 +112,7 @@ Options (under `ask`):
 | `--no-searxng` | skip SearXNG entirely (pure obscura path) |
 | `--searxng-url <URL>` | external SearXNG instance URL |
 | `--validate`, `--sagaz` | validate semantic relevance and deduplicate context candidates with `sagaz` before synthesis |
+| `--jev` | validate semantic relevance and deduplicate context candidates with TypeSafe JEV before synthesis |
 
 ## Semantic Validation & Deduplication: `sagaz` (Laya / JEV)
 
@@ -120,6 +122,16 @@ When running `faro search` or `faro ask` with `--validate` (or `--sagaz`), Faro 
 - **Pairwise Deduplication**: Detects semantic equivalence across different search engines and drops duplicate snippets even when phrased slightly differently.
 - **Batched Execution**: Packs state and all typed questions into a single `sagaz predict -s ... -q ... --json` batch invocation, paying startup costs once and computing all decisions in parallel.
 - **Graceful Fallback**: If `sagaz` is missing or fails, Faro prints a diagnostic message and proceeds with unvalidated search results without crashing.
+
+### TypeSafe JEV validation
+
+Pass `--jev` to `search` or `ask` to validate with the TypeSafe JEV cloud System One model instead of local `sagaz`:
+
+- Requires the `TYPESAFE_API_KEY` env var (get a key at https://console.typesafe.ai).
+- Cloud endpoint: no cold start, ~1s per query.
+- Same relevance/duplicate thresholds and pairwise filtering as `sagaz`.
+- Graceful skip with a diagnostic message when the key is missing or the request fails.
+- When both `--jev` and `--validate` are passed, `--jev` wins.
 
 ## Updating
 
