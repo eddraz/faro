@@ -68,6 +68,10 @@ enum Command {
         /// Validate relevance and deduplicate using local sagaz (Laya / JEV).
         #[arg(long, aliases = ["sagaz"])]
         validate: bool,
+
+        /// Validate relevance and deduplicate using TypeSafe JEV (cloud System One model).
+        #[arg(long)]
+        jev: bool,
     },
     /// Search the web and synthesize an AI-generated answer using a local LLM.
     Ask {
@@ -110,6 +114,10 @@ enum Command {
         /// Validate relevance and deduplicate using local sagaz (Laya / JEV) before AI synthesis.
         #[arg(long, aliases = ["sagaz"])]
         validate: bool,
+
+        /// Validate relevance and deduplicate using TypeSafe JEV (cloud System One model).
+        #[arg(long)]
+        jev: bool,
     },
     /// Update faro to the latest release.
     Update,
@@ -170,6 +178,7 @@ struct SearchArgs {
     searxng_port: u16,
     searxng_url: Option<String>,
     validate: bool,
+    jev: bool,
 }
 
 impl From<Command> for SearchArgs {
@@ -187,6 +196,7 @@ impl From<Command> for SearchArgs {
                 searxng_port,
                 searxng_url,
                 validate,
+                jev,
             } => Self {
                 query,
                 engines,
@@ -199,6 +209,7 @@ impl From<Command> for SearchArgs {
                 searxng_port,
                 searxng_url,
                 validate,
+                jev,
             },
             Command::Update => unreachable!("update is handled separately"),
             Command::Ask { .. } => unreachable!("ask is handled separately"),
@@ -383,10 +394,23 @@ async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let markdown = args.markdown;
     let with_snippet = args.with_snippet;
     let validate = args.validate;
+    let use_jev = args.jev;
     let query = args.query.clone();
     let mut results = fetch_search_results(&args).await?;
 
-    if validate {
+    if use_jev {
+        let query_clone = query.clone();
+        let res_clone = results.clone();
+        results = tokio::task::spawn_blocking(move || {
+            ai::jev::validate_and_deduplicate(
+                &query_clone,
+                &res_clone,
+                ai::sagaz::DEFAULT_RELEVANCE_THRESHOLD,
+                ai::sagaz::DEFAULT_DUPLICATE_THRESHOLD,
+            )
+        })
+        .await??;
+    } else if validate {
         let query_clone = query.clone();
         let res_clone = results.clone();
         results = tokio::task::spawn_blocking(move || {
@@ -413,7 +437,19 @@ async fn run_ask(
     eprintln!("faro: searching web across engines for context...");
     let mut results = fetch_search_results(&args).await?;
 
-    if args.validate {
+    if args.jev {
+        let query_clone = query.clone();
+        let res_clone = results.clone();
+        results = tokio::task::spawn_blocking(move || {
+            ai::jev::validate_and_deduplicate(
+                &query_clone,
+                &res_clone,
+                ai::sagaz::DEFAULT_RELEVANCE_THRESHOLD,
+                ai::sagaz::DEFAULT_DUPLICATE_THRESHOLD,
+            )
+        })
+        .await??;
+    } else if args.validate {
         let query_clone = query.clone();
         let res_clone = results.clone();
         results = tokio::task::spawn_blocking(move || {
@@ -457,6 +493,7 @@ async fn main() -> anyhow::Result<()> {
             model,
             llama_port,
             validate,
+            jev,
         } => {
             let search_args = SearchArgs {
                 query: query.clone(),
@@ -470,6 +507,7 @@ async fn main() -> anyhow::Result<()> {
                 searxng_port,
                 searxng_url,
                 validate,
+                jev,
             };
             run_ask(query, search_args, model, llama_port).await
         }
