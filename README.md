@@ -72,6 +72,8 @@ Options (all under `search`):
 | `--no-searxng` | skip SearXNG entirely: pure obscura path |
 | `--searxng-port <PORT>` | local port for the SearXNG container (default 8888) |
 | `--searxng-url <URL>` | external SearXNG instance URL (env `FARO_SEARXNG_URL`); skips local container |
+| `--validate`, `--sagaz` | validate semantic relevance and filter duplicate results using local `sagaz` (Laya / JEV) |
+| `--jev` | validate semantic relevance and filter duplicate results using TypeSafe JEV (cloud System One model) |
 
 Engines that fail (network, blockpage, timeout) print one error line to stderr and never sink the run.
 
@@ -80,6 +82,9 @@ Engines that fail (network, blockpage, timeout) print one error line to stderr a
 ```bash
 # Ask a question: searches the web and synthesizes an answer with citations using LFM2.5
 faro ask "How does ownership work in Rust?"
+
+# With semantic validation and deduplication filter
+faro ask "How does ownership work in Rust?" --validate
 
 # Custom GGUF model or llama-server port
 faro ask "Explain quantum computing" --model ~/models/LFM2.5-230M-F16.gguf --llama-port 43211
@@ -106,6 +111,27 @@ Options (under `ask`):
 | `--engine <NAME>` | repeatable engine filter (same as `search`) |
 | `--no-searxng` | skip SearXNG entirely (pure obscura path) |
 | `--searxng-url <URL>` | external SearXNG instance URL |
+| `--validate`, `--sagaz` | validate semantic relevance and deduplicate context candidates with `sagaz` before synthesis |
+| `--jev` | validate semantic relevance and deduplicate context candidates with TypeSafe JEV before synthesis |
+
+## Semantic Validation & Deduplication: `sagaz` (Laya / JEV)
+
+When running `faro search` or `faro ask` with `--validate` (or `--sagaz`), Faro hooks into your local [sagaz-cli](https://github.com/NandhaKishorM/laya) binary (`~/.local/bin/sagaz`) running the non-autoregressive decision model Laya (JEV):
+
+- **Query Relevance Verification**: Verifies whether each retrieved search snippet truly answers the user's query and drops irrelevant noise or low-quality crawler hits.
+- **Pairwise Deduplication**: Detects semantic equivalence across different search engines and drops duplicate snippets even when phrased slightly differently.
+- **Batched Execution**: Packs state and all typed questions into a single `sagaz predict -s ... -q ... --json` batch invocation, paying startup costs once and computing all decisions in parallel.
+- **Graceful Fallback**: If `sagaz` is missing or fails, Faro prints a diagnostic message and proceeds with unvalidated search results without crashing.
+
+### TypeSafe JEV validation
+
+Pass `--jev` to `search` or `ask` to validate with the TypeSafe JEV cloud System One model instead of local `sagaz`:
+
+- Requires the `TYPESAFE_API_KEY` env var (get a key at https://console.typesafe.ai).
+- Cloud endpoint: no cold start, ~1s per query.
+- Same relevance/duplicate thresholds and pairwise filtering as `sagaz`.
+- Graceful skip with a diagnostic message when the key is missing or the request fails.
+- When both `--jev` and `--validate` are passed, `--jev` wins.
 
 ## Updating
 

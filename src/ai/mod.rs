@@ -7,8 +7,10 @@
 //! 4. Return the synthesized answer to the user.
 
 pub mod candle;
+pub mod jev;
 pub mod llama;
 pub mod model;
+pub mod sagaz;
 
 use std::path::Path;
 
