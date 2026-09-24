@@ -48,4 +48,4 @@ sagaz filter logic and thresholds.
   `--jev` on search+ask help; `--validate`/`--sagaz` byte-identical to HEAD;
   precedence verified by code reading (jev branch before validate).
 - Pending: full live validation with a real `TYPESAFE_API_KEY` (env empty).
-- Commit: (pending)
+- Commit: 199087c
