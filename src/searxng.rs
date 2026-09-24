@@ -116,13 +116,71 @@ fn ensure_pasta() -> Result<()> {
     Ok(())
 }
 
-/// Guarantee podman is available, installing it on first run if necessary.
-pub(crate) fn ensure_podman() -> Result<PathBuf> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ContainerRunner {
+    Podman(PathBuf),
+    Docker(PathBuf),
+}
+
+impl ContainerRunner {
+    pub(crate) fn program(&self) -> &Path {
+        match self {
+            ContainerRunner::Podman(p) => p.as_path(),
+            ContainerRunner::Docker(p) => p.as_path(),
+        }
+    }
+
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            ContainerRunner::Podman(_) => "podman",
+            ContainerRunner::Docker(_) => "docker",
+        }
+    }
+
+    pub(crate) fn container_exists(&self) -> bool {
+        let mut cmd = std::process::Command::new(self.program());
+        match self {
+            ContainerRunner::Podman(_) => {
+                cmd.args(["container", "exists", CONTAINER_NAME]);
+            }
+            ContainerRunner::Docker(_) => {
+                cmd.args(["container", "inspect", CONTAINER_NAME]);
+            }
+        }
+        cmd.output().map(|out| out.status.success()).unwrap_or(false)
+    }
+
+    pub(crate) fn image_exists(&self) -> bool {
+        let mut cmd = std::process::Command::new(self.program());
+        match self {
+            ContainerRunner::Podman(_) => {
+                cmd.args(["image", "exists", IMAGE]);
+            }
+            ContainerRunner::Docker(_) => {
+                cmd.args(["image", "inspect", IMAGE]);
+            }
+        }
+        cmd.output().map(|out| out.status.success()).unwrap_or(false)
+    }
+
+    pub(crate) fn is_docker(&self) -> bool {
+        matches!(self, ContainerRunner::Docker(_))
+    }
+}
+
+/// Find an available container runner: prefers podman, falls back to docker,
+/// installs podman if neither is found.
+pub(crate) fn ensure_runner() -> Result<ContainerRunner> {
     if let Some(path) = podman_path() {
-        return Ok(path);
+        return Ok(ContainerRunner::Podman(path));
+    }
+    if let Some(path) = which("docker") {
+        return Ok(ContainerRunner::Docker(path));
     }
     install_podman()?;
-    podman_path().ok_or_else(|| anyhow!("podman still not on PATH after installation"))
+    podman_path()
+        .map(ContainerRunner::Podman)
+        .ok_or_else(|| anyhow!("podman still not on PATH after installation"))
 }
 
 /// ~/apps/searxng
@@ -280,43 +338,29 @@ fn ensure_podman_machine(_podman: &Path) -> Result<()> {
     Ok(())
 }
 
-fn container_exists(podman: &Path) -> bool {
-    std::process::Command::new(podman)
-        .args(["container", "exists", CONTAINER_NAME])
-        .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
-}
-
-fn image_exists(podman: &Path) -> bool {
-    std::process::Command::new(podman)
-        .args(["image", "exists", IMAGE])
-        .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
-}
-
-fn start_container(podman: &Path, port: u16) -> Result<()> {
-    if container_exists(podman) {
-        eprintln!("starting existing searxng container...");
-        let status = std::process::Command::new(podman)
+fn start_container(runner: &ContainerRunner, port: u16) -> Result<()> {
+    let name = runner.name();
+    let prog = runner.program();
+    if runner.container_exists() {
+        eprintln!("starting existing searxng container via {name}...");
+        let status = std::process::Command::new(prog)
             .args(["start", CONTAINER_NAME])
             .status()
-            .context("failed to run podman start")?;
+            .with_context(|| format!("failed to run {name} start"))?;
         if !status.success() {
-            return Err(anyhow!("podman start searxng failed ({status})"));
+            return Err(anyhow!("{name} start searxng failed ({status})"));
         }
         return Ok(());
     }
 
-    if !image_exists(podman) {
-        eprintln!("pulling {IMAGE} (first run only)...");
-        let status = std::process::Command::new(podman)
+    if !runner.image_exists() {
+        eprintln!("pulling {IMAGE} via {name} (first run only)...");
+        let status = std::process::Command::new(prog)
             .args(["pull", IMAGE])
             .status()
-            .context("failed to run podman pull")?;
+            .with_context(|| format!("failed to run {name} pull"))?;
         if !status.success() {
-            return Err(anyhow!("podman pull {IMAGE} failed ({status})"));
+            return Err(anyhow!("{name} pull {IMAGE} failed ({status})"));
         }
     }
 
@@ -326,14 +370,18 @@ fn start_container(podman: &Path, port: u16) -> Result<()> {
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("cannot create {}", data_dir.display()))?;
 
-    let network = resolve_network()?;
-    eprintln!("creating searxng container on 127.0.0.1:{port}...");
-    let status = std::process::Command::new(podman)
+    let network = if runner.is_docker() {
+        None
+    } else {
+        resolve_network()?
+    };
+    eprintln!("creating searxng container on 127.0.0.1:{port} via {name}...");
+    let status = std::process::Command::new(prog)
         .args(run_args(&config_dir, &data_dir, port, network))
         .status()
-        .context("failed to run podman run")?;
+        .with_context(|| format!("failed to run {name} run"))?;
     if !status.success() {
-        return Err(anyhow!("podman run searxng failed ({status})"));
+        return Err(anyhow!("{name} run searxng failed ({status})"));
     }
     Ok(())
 }
@@ -362,14 +410,16 @@ fn wait_healthy(port: u16, budget: Duration) -> Result<()> {
 }
 
 /// Ensure the SearXNG container is reachable: healthy check first (cheap),
-/// then podman presence, image, container creation/start and health wait.
+/// then container runner presence, image, container creation/start and health wait.
 pub(crate) fn ensure_ready(port: u16) -> Result<()> {
     if healthy(port) {
         return Ok(());
     }
-    let podman = ensure_podman()?;
-    ensure_podman_machine(&podman)?;
-    start_container(&podman, port)?;
+    let runner = ensure_runner()?;
+    if let ContainerRunner::Podman(ref podman) = runner {
+        ensure_podman_machine(podman)?;
+    }
+    start_container(&runner, port)?;
     wait_healthy(port, STARTUP_BUDGET)
 }
 
@@ -456,15 +506,16 @@ pub(crate) fn parse_search(json: &str) -> Result<SearxngSearch> {
     })
 }
 
-/// Query the local SearXNG instance for the JSON API results.
-pub(crate) fn search(
-    port: u16,
+/// Query any SearXNG instance URL for the JSON API results.
+pub(crate) fn search_url(
+    base_url: &str,
     query: &str,
     engines: Option<&[String]>,
     limit: usize,
 ) -> Result<SearxngSearch> {
+    let trimmed = base_url.trim_end_matches('/');
     let mut url = format!(
-        "http://127.0.0.1:{port}/search?q={}&format=json",
+        "{trimmed}/search?q={}&format=json",
         crate::engine::encode_query(query)
     );
     if let Some(engines) = engines {
@@ -484,6 +535,16 @@ pub(crate) fn search(
     let mut search = parse_search(&body)?;
     search.results.truncate(limit);
     Ok(search)
+}
+
+/// Query the local SearXNG instance on the specified port.
+pub(crate) fn search(
+    port: u16,
+    query: &str,
+    engines: Option<&[String]>,
+    limit: usize,
+) -> Result<SearxngSearch> {
+    search_url(&format!("http://127.0.0.1:{port}"), query, engines, limit)
 }
 
 #[cfg(test)]

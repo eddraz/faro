@@ -2,10 +2,15 @@
 
 use crate::engine::SearchResult;
 
-pub(crate) fn render(results: &[SearchResult], json: bool, with_snippet: bool) {
+pub(crate) fn render(results: &[SearchResult], json: bool, markdown: bool, with_snippet: bool) {
     if json {
         let payload = serde_json::to_string_pretty(results).unwrap_or_else(|_| "[]".to_string());
         println!("{payload}");
+        return;
+    }
+
+    if markdown {
+        render_markdown(results, with_snippet);
         return;
     }
 
@@ -25,6 +30,26 @@ pub(crate) fn render(results: &[SearchResult], json: bool, with_snippet: bool) {
         );
         if with_snippet && !result.snippet.is_empty() {
             println!("{:11} {:58}", "", truncate(&result.snippet, 120));
+        }
+    }
+}
+
+fn render_markdown(results: &[SearchResult], with_snippet: bool) {
+    if results.is_empty() {
+        println!("*No results found.*");
+        return;
+    }
+
+    for (i, result) in results.iter().enumerate() {
+        println!(
+            "{}. [{}]({}) — *{}*",
+            i + 1,
+            result.title,
+            result.url,
+            result.engine
+        );
+        if with_snippet && !result.snippet.is_empty() {
+            println!("   > {}", result.snippet.replace('\n', " "));
         }
     }
 }

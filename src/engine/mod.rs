@@ -75,6 +75,77 @@ pub(crate) async fn run_engine(
     Ok(results)
 }
 
+/// Normalize an URL for deduplication by stripping tracking parameters,
+/// normalizing host casing, removing fragments, and trimming trailing slashes.
+pub(crate) fn canonicalize_url(raw: &str) -> String {
+    let without_fragment = match raw.split_once('#') {
+        Some((left, _)) => left,
+        None => raw,
+    };
+
+    let (base, query_str) = match without_fragment.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (without_fragment, None),
+    };
+
+    let normalized_base = if let Some((scheme, rest)) = base.split_once("://") {
+        let scheme_lower = scheme.to_ascii_lowercase();
+        let (host, path) = match rest.split_once('/') {
+            Some((h, p)) => (h.to_ascii_lowercase(), format!("/{}", p.trim_end_matches('/'))),
+            None => (rest.to_ascii_lowercase(), String::new()),
+        };
+        let clean_path = if path == "/" { String::new() } else { path };
+        format!("{scheme_lower}://{host}{clean_path}")
+    } else {
+        base.trim_end_matches('/').to_string()
+    };
+
+    const TRACKING_KEYS: &[&str] = &[
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "utm_id",
+        "fbclid",
+        "gclid",
+        "msclkid",
+        "twclid",
+        "_ga",
+        "_gl",
+        "ref_src",
+    ];
+
+    let clean_query = if let Some(query) = query_str {
+        let kept: Vec<&str> = query
+            .split('&')
+            .filter(|part| {
+                if part.is_empty() {
+                    return false;
+                }
+                let key = match part.split_once('=') {
+                    Some((k, _)) => k,
+                    None => *part,
+                };
+                let key_lower = key.to_ascii_lowercase();
+                !TRACKING_KEYS.iter().any(|&t| t == key_lower)
+            })
+            .collect();
+        if kept.is_empty() {
+            None
+        } else {
+            Some(kept.join("&"))
+        }
+    } else {
+        None
+    };
+
+    match clean_query {
+        Some(q) => format!("{normalized_base}?{q}"),
+        None => normalized_base,
+    }
+}
+
 /// Cascade merge (the hybrid): per requested engine, SearXNG results come
 /// first; obscura results fill the gap up to `limit`, deduplicating URLs.
 /// An engine listed in `unresponsive` (searxng reported it rate-limited or
@@ -111,7 +182,7 @@ pub(crate) fn cascade_merge(
                     if count >= limit {
                         break;
                     }
-                    if seen.insert(result.url.clone()) {
+                    if seen.insert(canonicalize_url(&result.url)) {
                         out.push(result);
                         count += 1;
                     }
@@ -124,7 +195,7 @@ pub(crate) fn cascade_merge(
                     if count >= limit {
                         break;
                     }
-                    if seen.insert(result.url.clone()) {
+                    if seen.insert(canonicalize_url(&result.url)) {
                         out.push(result);
                         count += 1;
                     }
@@ -218,4 +289,46 @@ mod tests {
         assert_eq!(encode_query("c++ tips"), "c%2B%2B+tips");
         assert_eq!(encode_query("a_b-c.d"), "a_b-c.d");
     }
+
+    #[test]
+    fn canonicalizes_urls_by_stripping_tracking_and_normalizing() {
+        use super::canonicalize_url;
+        assert_eq!(
+            canonicalize_url("https://EXAMPLE.com/foo/?utm_source=twitter&bar=1#heading"),
+            "https://example.com/foo?bar=1"
+        );
+        assert_eq!(
+            canonicalize_url("https://rust-lang.org/learn/"),
+            "https://rust-lang.org/learn"
+        );
+        assert_eq!(
+            canonicalize_url("https://rust-lang.org/?utm_campaign=launch"),
+            "https://rust-lang.org"
+        );
+        assert_eq!(
+            canonicalize_url("https://example.com/item?fbclid=xyz&gclid=123"),
+            "https://example.com/item"
+        );
+    }
+
+    #[test]
+    fn cascade_deduplicates_urls_with_different_tracking_params() {
+        let selected = vec!["github".to_string()];
+        let searxng = vec![
+            result("github", "g1", "https://github.com/rust-lang/rust?utm_source=searxng"),
+        ];
+        let mut obscura = HashMap::new();
+        obscura.insert(
+            "github".to_string(),
+            vec![
+                result("github", "g1-clean", "https://github.com/rust-lang/rust/"),
+                result("github", "g2", "https://github.com/rust-lang/cargo"),
+            ],
+        );
+        let merged = cascade_merge(&selected, 3, searxng, &[], obscura);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].url, "https://github.com/rust-lang/rust?utm_source=searxng");
+        assert_eq!(merged[1].url, "https://github.com/rust-lang/cargo");
+    }
 }
+
