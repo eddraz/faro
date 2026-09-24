@@ -2,6 +2,23 @@
 
 All notable changes to `faro` are documented here.
 
+## 0.3.0 — 2026-09-24
+
+- New `faro ask`: AI-synthesized answer over search results using a local
+  llama-server, with a candle local-inference fallback when no server is
+  reachable.
+- Semantic validation and deduplication for `search` and `ask`:
+  - `--validate` (alias `--sagaz`) runs the local `sagaz` binary (Laya / JEV),
+    packing all top candidates and duplicate pairs into a single batched pass.
+  - `--jev` validates with the TypeSafe JEV cloud System One model
+    (`TYPESAFE_API_KEY`), with `criteria` rubrics for relevance and duplicate
+    judgments. Takes precedence over `--validate` when both are passed.
+  - Both degrade gracefully: on missing binary/key or request failure, results
+    are returned unvalidated with a diagnostic on stderr.
+- Search reliability and UX: URL canonicalization for deduplication, lazy
+  obscura execution, external SearXNG via `--searxng-url` (env
+  `FARO_SEARXNG_URL`), markdown output, and per-engine error isolation.
+
 ## 0.2.0 — 2026-09-21
 
 - **Breaking:** the CLI now uses subcommands. The bare form `faro "<query>"`

@@ -1,6 +1,6 @@
 [package]
 name = "faro"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Hybrid multi-engine web search CLI: one query across 8 engines, powered by obscura and SearXNG"
 license = "MIT"
