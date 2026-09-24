@@ -1,5 +1,6 @@
 //! faro: hybrid multi-engine search CLI (SearXNG first, obscura fallback).
 
+mod ai;
 mod bootstrap;
 mod engine;
 mod output;
@@ -63,6 +64,60 @@ enum Command {
         /// Skips local container startup.
         #[arg(long, env = "FARO_SEARXNG_URL")]
         searxng_url: Option<String>,
+
+        /// Validate relevance and deduplicate using local sagaz (Laya / JEV).
+        #[arg(long, aliases = ["sagaz"])]
+        validate: bool,
+
+        /// Validate relevance and deduplicate using TypeSafe JEV (cloud System One model).
+        #[arg(long)]
+        jev: bool,
+    },
+    /// Search the web and synthesize an AI-generated answer using a local LLM.
+    Ask {
+        /// Question or topic to ask (e.g. "What is Rust ownership?").
+        query: String,
+
+        /// Engines to query (repeatable). Defaults to all validated engines.
+        #[arg(long = "engine", value_enum)]
+        engines: Vec<EngineKind>,
+
+        /// Maximum results per engine to feed into context.
+        #[arg(long, default_value_t = 3)]
+        limit: usize,
+
+        /// Per-engine fetch timeout in seconds.
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
+
+        /// Skip SearXNG entirely: query only the obscura-backed engines.
+        #[arg(long)]
+        no_searxng: bool,
+
+        /// Local port where the SearXNG container is published.
+        #[arg(long, default_value_t = searxng::DEFAULT_PORT)]
+        searxng_port: u16,
+
+        /// External SearXNG instance URL (e.g. "http://localhost:8888").
+        /// Skips local container startup.
+        #[arg(long, env = "FARO_SEARXNG_URL")]
+        searxng_url: Option<String>,
+
+        /// Override path to the GGUF model file.
+        #[arg(long, env = "FARO_MODEL")]
+        model: Option<std::path::PathBuf>,
+
+        /// Override port for llama-server (defaults to 43211 for LFM2.5 or 43212 for K2).
+        #[arg(long)]
+        llama_port: Option<u16>,
+
+        /// Validate relevance and deduplicate using local sagaz (Laya / JEV) before AI synthesis.
+        #[arg(long, aliases = ["sagaz"])]
+        validate: bool,
+
+        /// Validate relevance and deduplicate using TypeSafe JEV (cloud System One model).
+        #[arg(long)]
+        jev: bool,
     },
     /// Update faro to the latest release.
     Update,
@@ -122,6 +177,8 @@ struct SearchArgs {
     no_searxng: bool,
     searxng_port: u16,
     searxng_url: Option<String>,
+    validate: bool,
+    jev: bool,
 }
 
 impl From<Command> for SearchArgs {
@@ -138,6 +195,8 @@ impl From<Command> for SearchArgs {
                 no_searxng,
                 searxng_port,
                 searxng_url,
+                validate,
+                jev,
             } => Self {
                 query,
                 engines,
@@ -149,13 +208,16 @@ impl From<Command> for SearchArgs {
                 no_searxng,
                 searxng_port,
                 searxng_url,
+                validate,
+                jev,
             },
             Command::Update => unreachable!("update is handled separately"),
+            Command::Ask { .. } => unreachable!("ask is handled separately"),
         }
     }
 }
 
-async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
+async fn fetch_search_results(args: &SearchArgs) -> anyhow::Result<Vec<engine::SearchResult>> {
     // Default display order: web results first, github repos last.
     let mut selected: Vec<String> = if args.engines.is_empty() {
         [
@@ -318,14 +380,99 @@ async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         eprintln!("{name}: {error}");
     }
 
-    let merged = engine::cascade_merge(
+    Ok(engine::cascade_merge(
         &selected,
         args.limit,
         searxng_results,
         &unresponsive,
         obscura_results,
-    );
-    output::render(&merged, args.json, args.markdown, args.with_snippet);
+    ))
+}
+
+async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
+    let json = args.json;
+    let markdown = args.markdown;
+    let with_snippet = args.with_snippet;
+    let validate = args.validate;
+    let use_jev = args.jev;
+    let query = args.query.clone();
+    let mut results = fetch_search_results(&args).await?;
+
+    if use_jev {
+        let query_clone = query.clone();
+        let res_clone = results.clone();
+        results = tokio::task::spawn_blocking(move || {
+            ai::jev::validate_and_deduplicate(
+                &query_clone,
+                &res_clone,
+                ai::sagaz::DEFAULT_RELEVANCE_THRESHOLD,
+                ai::sagaz::DEFAULT_DUPLICATE_THRESHOLD,
+            )
+        })
+        .await??;
+    } else if validate {
+        let query_clone = query.clone();
+        let res_clone = results.clone();
+        results = tokio::task::spawn_blocking(move || {
+            ai::sagaz::validate_and_deduplicate(
+                &query_clone,
+                &res_clone,
+                ai::sagaz::DEFAULT_RELEVANCE_THRESHOLD,
+                ai::sagaz::DEFAULT_DUPLICATE_THRESHOLD,
+            )
+        })
+        .await??;
+    }
+
+    output::render(&results, json, markdown, with_snippet);
+    Ok(())
+}
+
+async fn run_ask(
+    query: String,
+    args: SearchArgs,
+    model: Option<std::path::PathBuf>,
+    llama_port: Option<u16>,
+) -> anyhow::Result<()> {
+    eprintln!("faro: searching web across engines for context...");
+    let mut results = fetch_search_results(&args).await?;
+
+    if args.jev {
+        let query_clone = query.clone();
+        let res_clone = results.clone();
+        results = tokio::task::spawn_blocking(move || {
+            ai::jev::validate_and_deduplicate(
+                &query_clone,
+                &res_clone,
+                ai::sagaz::DEFAULT_RELEVANCE_THRESHOLD,
+                ai::sagaz::DEFAULT_DUPLICATE_THRESHOLD,
+            )
+        })
+        .await??;
+    } else if args.validate {
+        let query_clone = query.clone();
+        let res_clone = results.clone();
+        results = tokio::task::spawn_blocking(move || {
+            ai::sagaz::validate_and_deduplicate(
+                &query_clone,
+                &res_clone,
+                ai::sagaz::DEFAULT_RELEVANCE_THRESHOLD,
+                ai::sagaz::DEFAULT_DUPLICATE_THRESHOLD,
+            )
+        })
+        .await??;
+    }
+
+    let answer = ai::synthesize(&query, &results, model.as_deref(), llama_port)?;
+
+    println!("\n{answer}\n");
+
+    if !results.is_empty() {
+        println!("--- Sources ---");
+        for (i, r) in results.iter().enumerate() {
+            println!("[{}] {} — {} ({})", i + 1, r.title, r.url, r.engine);
+        }
+    }
     Ok(())
 }
 
@@ -335,6 +482,35 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Command::Search { .. } => run_search(args.command.into()).await,
+        Command::Ask {
+            query,
+            engines,
+            limit,
+            timeout,
+            no_searxng,
+            searxng_port,
+            searxng_url,
+            model,
+            llama_port,
+            validate,
+            jev,
+        } => {
+            let search_args = SearchArgs {
+                query: query.clone(),
+                engines,
+                limit,
+                json: false,
+                markdown: false,
+                timeout,
+                with_snippet: true,
+                no_searxng,
+                searxng_port,
+                searxng_url,
+                validate,
+                jev,
+            };
+            run_ask(query, search_args, model, llama_port).await
+        }
         Command::Update => update::run(),
     }
 }
