@@ -77,6 +77,48 @@ Options (all under `search`):
 
 Engines that fail (network, blockpage, timeout) print one error line to stderr and never sink the run.
 
+## Web Content Extraction: `faro fetch` and `faro gather`
+
+Extract clean, boilerplate-free Markdown (or plain text) from full web pages via `obscura` — designed to pipe directly into downstream tools like `lector` or `knowledge`:
+
+```bash
+# Fetch a single URL as clean Markdown (strips nav/footer/scripts/aside)
+faro fetch "https://doc.rust-lang.org/nomicon/ownership.html"
+
+# Target a specific CSS selector or emit plain text / JSON
+faro fetch "https://example.com/article" --selector "article" --json
+
+# Search, filter with sagaz/jev, and fetch clean Markdown for the top pages
+faro gather "rust tokio cancel safety" --max-pages 3 --validate
+```
+
+Options under `fetch`:
+
+| Flag | Effect |
+|---|---|
+| `--selector <CSS>` | CSS selector to narrow content extraction |
+| `--text` | emit clean plain text instead of Markdown |
+| `--raw-html` | emit raw HTML from `obscura` without conversion |
+| `--json` | emit JSON array `{ url, title, content }` |
+| `--timeout <SECS>` | per-URL fetch timeout (default 60) |
+| `--concurrency <N>` | max concurrent URL fetches (default 4) |
+| `--allow-private-network` | permit loopback / RFC1918 / link-local URLs |
+| `-o`, `--output <FILE>` | write output to a file instead of stdout |
+
+Options under `gather`:
+
+| Flag | Effect |
+|---|---|
+| `--engine <NAME>` | repeatable engine filter (same as `search`) |
+| `--limit <N>` | max search results per engine (default 3) |
+| `--max-pages <N>` | max unique result pages to fetch (default 5) |
+| `--concurrency <N>` | max concurrent page fetches (default 3) |
+| `--selector <CSS>` | CSS selector to narrow content extraction |
+| `--text` | emit clean plain text instead of Markdown |
+| `--json` | emit JSON array `{ url, title, engine, snippet, content }` |
+| `--validate`, `--sagaz`, `--jev` | filter relevance/duplicates before downloading full pages |
+| `-o`, `--output <FILE>` | write output to a file instead of stdout |
+
 ## AI Synthesis: `faro ask`
 
 ```bash

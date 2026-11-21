@@ -8,10 +8,24 @@ use anyhow::{anyhow, Context, Result};
 ///
 /// `--wait` is intentionally never passed: it blocks the fetch forever.
 pub(crate) async fn fetch_html(binary: &Path, url: &str, timeout_secs: u64) -> Result<String> {
-    let command = tokio::process::Command::new(binary)
-        .args(["fetch", url, "--stealth", "--dump", "html"])
-        .stdin(std::process::Stdio::null())
-        .output();
+    fetch_html_opts(binary, url, timeout_secs, false).await
+}
+
+/// Variant of `fetch_html` with explicit control over private-network access.
+pub(crate) async fn fetch_html_opts(
+    binary: &Path,
+    url: &str,
+    timeout_secs: u64,
+    allow_private_network: bool,
+) -> Result<String> {
+    let mut cmd = tokio::process::Command::new(binary);
+    cmd.arg("fetch")
+        .arg(url)
+        .args(["--stealth", "--dump", "html"]);
+    if allow_private_network {
+        cmd.arg("--allow-private-network");
+    }
+    let command = cmd.stdin(std::process::Stdio::null()).output();
 
     let output = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), command)
         .await
