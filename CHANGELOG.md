@@ -2,6 +2,23 @@
 
 All notable changes to `faro` are documented here.
 
+## 0.4.0 — 2026-11-21
+
+- New `faro fetch`: fetch one or more URLs via `obscura` with bounded
+  concurrency and extract clean, boilerplate-free Markdown, plain text, raw
+  HTML, or JSON (`--selector`, `--text`, `--raw-html`, `--json`,
+  `--concurrency`, `--timeout`, `--allow-private-network`, `-o`/`--output`).
+- New `faro gather`: search across engines, optionally validate and deduplicate
+  results (`--validate`/`--sagaz`, `--jev`), and fetch clean Markdown, plain
+  text, or JSON for the top unique pages (`--max-pages`, `--concurrency`,
+  `--selector`, `-o`/`--output`).
+- New HTML content extractor (`extract`): strips nav/footer/scripts/aside/form
+  boilerplate and ARIA noise, prioritizes main/article containers, resolves
+  relative links and images, shifts nested headings, and formats code fences,
+  lists, blockquotes, and Markdown tables.
+- Extracted shared `apply_validation` helper across `search`, `ask`, and
+  `gather`, and updated `README.md` with `fetch` and `gather` documentation.
+
 ## 0.3.0 — 2026-09-24
 
 - New `faro ask`: AI-synthesized answer over search results using a local
